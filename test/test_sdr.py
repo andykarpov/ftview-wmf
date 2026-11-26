@@ -31,7 +31,7 @@ def check(cond, what):
 
 
 def build():
-    subprocess.run([sys.executable, '-I', str(ROOT / 'tools/build.py'), '--build-dir', str(OUT / 'sdrtest'),
+    subprocess.run([sys.executable, '-I', str(ROOT / 'tools/build.py'), '--build-dir', str(OUT / 'sdrtest'), '--crt0', str(ROOT / 'diag/crt0.s'), '--header', str(ROOT / 'diag/sdrdiag_h.c'),
                     '-o', str(WMF), str(ROOT / 'test/sdr_main.c'), str(ROOT / 'src/sdr.c')],
                    check=True, stdout=subprocess.DEVNULL)
 
@@ -57,9 +57,9 @@ def run(fat, name, cards, reqs=()):
 
 def extents(m):
     out = []
-    for i in range(m.peek('_sdr_next', 2)):
-        fcl = m.peek('_sdr_ext', 4, i * 8)
-        lba = m.peek('_sdr_ext', 4, i * 8 + 4)
+    for i in range(m.peek('_sdr', 2, 4)):
+        fcl = m.peek('_sdr', 4, 16 + i * 8)
+        lba = m.peek('_sdr', 4, 20 + i * 8)
         out.append((fcl, lba))
     return out
 
@@ -94,7 +94,7 @@ def case(title, fat, name, cards, reqs=(), expect='OK', ext=None):
         if ext is not None:
             check(len(extents(m)) == ext, '%s: %d extents' % (title, len(extents(m))))
         reads_ok(m, reqs, title)
-    print('%-44s %-6s %3d extents  %7.1f ms' % (title, r, m.peek('_sdr_next', 2), m.ticks * 1000 / CPU_HZ))
+    print('%-44s %-6s %3d extents  %7.1f ms' % (title, r, m.peek('_sdr', 2, 4), m.ticks * 1000 / CPU_HZ))
     return m
 
 
@@ -122,10 +122,13 @@ def main():
          {1: SDCard(other.mm, ready=False), 2: SDCard(b.mm)}, [(7, 9, 0)])
     case('no card with the file', b, 'VIDEO.AVI',
          {1: SDCard(other.mm), 2: None}, expect='CARD')
-    # Too many runs for the table.
+    # The table holds 30 runs.
     c = make_image(img / 'c.img', 40, 1, 0, [('VIDEO.AVI', big)])
-    c.scatter('VIDEO.AVI', 70)
-    case('70 runs', c, 'VIDEO.AVI', {1: SDCard(c.mm), 2: None}, expect='FRAG')
+    c.scatter('VIDEO.AVI', 30)
+    case('30 runs', c, 'VIDEO.AVI', {1: SDCard(c.mm), 2: None}, [(0, 32, 0), (580, 21, 0)], ext=30)
+    c = make_image(img / 'c.img', 40, 1, 0, [('VIDEO.AVI', big)])
+    c.scatter('VIDEO.AVI', 31)
+    case('31 runs', c, 'VIDEO.AVI', {1: SDCard(c.mm), 2: None}, expect='FRAG')
     # A broken chain: a link to a free cluster number beyond the volume.
     d = make_image(img / 'd.img', 40, 1, 0, [('VIDEO.AVI', big)])
     _, first, _ = d.find('VIDEO.AVI')

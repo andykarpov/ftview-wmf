@@ -71,6 +71,24 @@ def areas(map_text):
     return out
 
 
+def tools():
+    """sdcc and sdasz80 of SDCC 4.3 or newer: $SDCC_HOME/bin, else
+    ~/.local/opt/sdcc-4.4.0/bin, else PATH. The FTView code of WC Improved
+    needs 4.3+: 4.2 does not fit it into the banks, crashes on the video bank
+    and splits UTF-8 comments of __asm."""
+    import os
+    home = os.environ.get('SDCC_HOME') or str(Path.home() / '.local/opt/sdcc-4.4.0')
+    path = os.pathsep.join([str(Path(home) / 'bin'), os.environ.get('PATH', '')])
+    sdcc, sdas = shutil.which('sdcc', path=path), shutil.which('sdasz80', path=path)
+    if not sdcc or not sdas:
+        fail('sdcc / sdasz80 not found (SDCC_HOME=%s)' % home)
+    ver = subprocess.run([sdcc, '--version'], capture_output=True, text=True).stdout
+    m = re.search(r' (\d+)\.(\d+)\.(\d+) ', ver)
+    if not m or (int(m[1]), int(m[2])) < (4, 3):
+        fail('%s is %s, SDCC 4.3 or newer is needed (SDCC_HOME)' % (sdcc, m[0].strip() if m else '?'))
+    return sdcc, sdas
+
+
 def check_vendor():
     manifest = json.loads((ROOT / 'vendor/manifest.json').read_text())
     for name, digest in manifest['files'].items():
@@ -87,11 +105,9 @@ def abi_headers(abi):
         (abi / name).write_text(text)
 
 
-def build(out, target, sources, header, data_loc=DATA_LOC):
+def build(out, target, sources, header, data_loc=DATA_LOC, crt0=None):
     check_vendor()
-    sdcc, sdas = shutil.which('sdcc'), shutil.which('sdasz80')
-    if not sdcc or not sdas:
-        fail('sdcc and sdasz80 must be in PATH')
+    sdcc, sdas = tools()
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
@@ -103,7 +119,7 @@ def build(out, target, sources, header, data_loc=DATA_LOC):
     common = ['-mz80', '--sdcccall', '1', '--std-sdcc11', '--opt-code-speed', '--no-std-crt0']
     libs = [str(ROOT / 'vendor' / p / n) for p, n in LIBS]
 
-    run([sdas, '-o', 'crt0.rel', str(ROOT / 'src/crt0.s')], out, log)
+    run([sdas, '-o', 'crt0.rel', str(crt0 or ROOT / 'src/crt0.s')], out, log)
     rels = []
     for src in sources:
         rel = Path(src).stem + '.rel'
@@ -156,9 +172,11 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('-o', '--output', default=str(ROOT / 'FTVIEW.WMF'))
     ap.add_argument('--build-dir', default=str(ROOT / 'build' / 'plugin'))
+    ap.add_argument('--crt0')
     ap.add_argument('--data-loc', type=lambda s: int(s, 0), default=DATA_LOC)
     ap.add_argument('--header', default=str(ROOT / 'src/wc_h.c'))
     ap.add_argument('sources', nargs='*', default=[str(ROOT / s) for s in SOURCES])
     args = ap.parse_args()
     build(Path(args.build_dir), Path(args.output), [Path(s).resolve() for s in args.sources],
-          Path(args.header).resolve(), args.data_loc)
+          Path(args.header).resolve(), args.data_loc,
+          Path(args.crt0).resolve() if args.crt0 else None)
