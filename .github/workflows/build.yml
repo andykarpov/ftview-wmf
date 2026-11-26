@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Tools (SDCC 4.2.0 of Ubuntu 24.04, python venv)
+      - name: Tools (SDCC 4.2.0 of Ubuntu 24.04, dosfstools, mtools, python venv)
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q sdcc
+          sudo apt-get install -y -q sdcc dosfstools mtools
           python3 -m venv .venv
           .venv/bin/pip install -q -r requirements.txt
       - name: Build
@@ -26,6 +26,8 @@ jobs:
         run: git diff --exit-code FTVIEW.WMF
       - name: Test
         run: make test
+      - name: Board check plugin
+        run: make diag
       - uses: actions/upload-artifact@v4
         with:
           name: FTVIEW.WMF

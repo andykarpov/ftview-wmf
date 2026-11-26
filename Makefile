@@ -9,14 +9,21 @@ all: $(BINARY)
 $(BINARY): $(SRC) tools/build.py
 	nice -n 19 python3 -I tools/build.py -o $@
 
+# SDRTEST.WMF: board check of the SD reader (diag/sdrdiag.c), not released
+diag: build/SDRTEST.WMF
+
+build/SDRTEST.WMF: diag/sdrdiag.c diag/sdrdiag_h.c src/sdr.c src/sdr.h tools/build.py
+	nice -n 19 python3 -I tools/build.py --build-dir build/diag --data-loc 0xB000 --header diag/sdrdiag_h.c -o $@ diag/sdrdiag.c src/sdr.c
+
 venv:
 	python3 -m venv .venv
 	.venv/bin/pip install -q -r requirements.txt
 
+# needs mkfs.fat (dosfstools) and mtools for the card images
 test: $(BINARY)
-	@if [ -d test ]; then for t in test/test_*.py; do $(PYTHON) $$t || exit 1; done; else echo "no tests yet"; fi
+	@for t in test/test_*.py; do nice -n 19 $(PYTHON) $$t || exit 1; done
 
 clean:
 	rm -rf build
 
-.PHONY: all venv test clean
+.PHONY: all diag venv test clean

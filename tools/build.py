@@ -30,6 +30,7 @@ DATA_LOC = 0xA800
 PAGE_END = 0xC000
 MAX_BLOCKS = 32
 LIBS = (('ft812', 'ft812.lib'), ('tsconf', 'ts.lib'), ('sdk', 'sdk.lib'))
+SOURCES = ('src/main.c',)
 HEADERS = (('ft812', 'ft812lib.h'), ('tsconf', 'tslib.h'), ('sdk', 'sdklib.h'))
 
 
@@ -86,7 +87,7 @@ def abi_headers(abi):
         (abi / name).write_text(text)
 
 
-def build(out, target):
+def build(out, target, sources, header, data_loc=DATA_LOC):
     check_vendor()
     sdcc, sdas = shutil.which('sdcc'), shutil.which('sdasz80')
     if not sdcc or not sdas:
@@ -103,23 +104,30 @@ def build(out, target):
     libs = [str(ROOT / 'vendor' / p / n) for p, n in LIBS]
 
     run([sdas, '-o', 'crt0.rel', str(ROOT / 'src/crt0.s')], out, log)
-    cc = [sdcc] + common + inc + ['crt0.rel', '--code-loc', hex(CODE_LOC),
-                                  '--data-loc', hex(DATA_LOC)]
-    run(cc + [str(ROOT / 'src/main.c')] + libs + ['-o', 'out.ihx'], out, log)
+    rels = []
+    for src in sources:
+        rel = Path(src).stem + '.rel'
+        run([sdcc] + common + inc + ['-c', str(src), '-o', rel], out, log)
+        rels.append(rel)
+    cc = [sdcc] + common + ['crt0.rel', '--code-loc', hex(CODE_LOC), '--data-loc', hex(data_loc)]
+    run(cc + rels + libs + ['-o', 'out.ihx'], out, log)
     # The libraries of a newer SDCC put code into _HOME; with --code-loc the
     # linker places it after _DATA (past #C000), so it is linked again right
     # after _CODE.
     a = areas((out / 'out.map').read_text())
     home = a['_CODE'][0] + a['_CODE'][1]
-    run(cc + ['-Wl-b_HOME=0x%04X' % home, str(ROOT / 'src/main.c')] + libs
-        + ['-o', 'out.ihx'], out, log)
+    run(cc + ['-Wl-b_HOME=0x%04X' % home] + rels + libs + ['-o', 'out.ihx'], out, log)
     a = areas((out / 'out.map').read_text())
     code_end = max(s + n for name, (s, n) in a.items()
                    if name in ('_HEADER0', '_HOME', '_CODE', '_INITIALIZER', '_GSINIT', '_GSFINAL') and n)
     data_end = max((s + n for name, (s, n) in a.items()
-                    if name in ('_DATA', '_INITIALIZED', '_BSEG', '_BSS') and n), default=DATA_LOC)
-    if code_end > DATA_LOC:
-        fail('code ends at #%04X, past the data at #%04X' % (code_end, DATA_LOC))
+                    if name in ('_DATA', '_INITIALIZED', '_BSEG', '_BSS') and n), default=data_loc)
+    # crt0 does not run GSINIT: initialised non-const globals would stay zero.
+    if a.get('_INITIALIZER', (0, 0))[1]:
+        fail('initialised non-const globals (%d bytes of _INITIALIZER): make them const'
+             % a['_INITIALIZER'][1])
+    if code_end > data_loc:
+        fail('code ends at #%04X, past the data at #%04X' % (code_end, data_loc))
     if data_end > PAGE_END:
         fail('data ends at #%04X, past #%04X' % (data_end, PAGE_END))
 
@@ -131,7 +139,7 @@ def build(out, target):
         fail('image takes %d blocks of 512 bytes, a WC page holds %d' % (blocks, MAX_BLOCKS))
     image += bytes(blocks * 512 - len(image))
 
-    run([sdcc] + common + inc + ['-DN_BLK0=%d' % blocks, str(ROOT / 'src/wc_h.c'),
+    run([sdcc] + common + inc + ['-DN_BLK0=%d' % blocks, str(header),
                                  '-o', 'hdr.ihx'], out, log)
     _, hdr = ihx2bin(out / 'hdr.ihx')
     if len(hdr) > 512:
@@ -141,12 +149,16 @@ def build(out, target):
         fail('header has no WildCommanderMDL magic')
     target.write_bytes(hdr + image)
     print('%s: %d bytes, code #8000..#%04X, data #%04X..#%04X, %d blocks' % (
-        target.name, len(hdr) + len(image), code_end, DATA_LOC, data_end, blocks))
+        target.name, len(hdr) + len(image), code_end, data_loc, data_end, blocks))
 
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('-o', '--output', default=str(ROOT / 'FTVIEW.WMF'))
-    ap.add_argument('--build-dir', default=str(ROOT / 'build'))
+    ap.add_argument('--build-dir', default=str(ROOT / 'build' / 'plugin'))
+    ap.add_argument('--data-loc', type=lambda s: int(s, 0), default=DATA_LOC)
+    ap.add_argument('--header', default=str(ROOT / 'src/wc_h.c'))
+    ap.add_argument('sources', nargs='*', default=[str(ROOT / s) for s in SOURCES])
     args = ap.parse_args()
-    build(Path(args.build_dir), Path(args.output))
+    build(Path(args.build_dir), Path(args.output), [Path(s).resolve() for s in args.sources],
+          Path(args.header).resolve(), args.data_loc)
