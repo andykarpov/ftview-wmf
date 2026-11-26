@@ -378,12 +378,14 @@ static u8 walk(u32 cl)
   return SDR_OK;
 }
 
+static u16 ext_of(u32 fcl);
+
 u32 sdr_lba(u32 fsec)
 {
   u32 fcl = fsec >> spc_shift;
   u16 i;
   if (fcl >= sdr_ncl) return 0;
-  for (i = sdr_next - 1; sdr_ext[i].fcl > fcl; i--);
+  i = ext_of(fcl);
   return sdr_ext[i].lba + ((fcl - sdr_ext[i].fcl) << spc_shift) + (fsec & (sdr_spc - 1));
 }
 
@@ -432,51 +434,104 @@ u8 sdr_open(u8 *buf, u32 size)
 
 // --- DMA read ------------------------------------------------------------
 
-static void dma_block(u8 page, u16 offs)
+// rb_n blocks of an open CMD18 into page rb_page from rb_offs: for each the
+// data token, DMA SPI -> RAM of 512 bytes (DMACtrl #42, 256 bursts of a word,
+// as DSDZC), the CRC. rb_ok 0: no token or an error token.
+static u8 rb_n, rb_page, rb_ok;
+static u16 rb_offs;
+
+static void read_blocks() __naked
 {
-  SDR_DMADX = page;
-  SDR_DMADH = offs >> 8;
-  SDR_DMADL = offs;
-  SDR_DMALEN = 0;          // bursts of one word
-  SDR_DMANUMH = 0;
-  SDR_DMANUM = 255;        // 256 bursts: 512 bytes
-  SDR_DMACTR = 0x42;       // SPI -> RAM (DSDZC: %01000010)
-  while (SDR_DMACTR & 0x80);
-  (void)SDR_DATA;          // CRC
-  (void)SDR_DATA;
+  __asm
+00001$:
+    ld hl, #0
+00002$:
+    in a, (#0x57)
+    cp #0xFF
+    jr nz, 00003$
+    dec hl
+    ld a, h
+    or l
+    jr nz, 00002$
+    jr 00009$
+00003$:
+    cp #0xFE
+    jr nz, 00009$
+    ld c, #0xAF
+    ld b, #0x1F
+    ld a, (_rb_page)
+    out (c), a
+    ld hl, (_rb_offs)
+    ld b, #0x1E
+    out (c), h
+    ld b, #0x1D
+    out (c), l
+    xor a
+    ld b, #0x26
+    out (c), a
+    ld b, #0x2C
+    out (c), a
+    ld b, #0x28
+    dec a
+    out (c), a
+    ld b, #0x27
+    ld a, #0x42
+    out (c), a
+00004$:
+    in a, (c)
+    rlca
+    jr c, 00004$
+    in a, (#0x57)
+    in a, (#0x57)
+    inc h
+    inc h
+    ld (_rb_offs), hl
+    ld hl, #_rb_n
+    dec (hl)
+    jr nz, 00001$
+    ld a, #1
+    ld (_rb_ok), a
+    ret
+00009$:
+    xor a
+    ld (_rb_ok), a
+    ret
+  __endasm;
+}
+
+// Index of the extent of file cluster fcl (< sdr_ncl).
+static u16 ext_of(u32 fcl)
+{
+  u16 i;
+  for (i = sdr_next - 1; sdr_ext[i].fcl > fcl; i--);
+  return i;
 }
 
 bool sdr_read(u32 fsec, u8 count, u8 page, u16 offs)
 {
-  u32 lba;
+  u32 fcl, lba, left;
+  u16 i;
   u8 run;
   bool ok = true;
   while (count && ok)
   {
-    lba = sdr_lba(fsec);
-    if (!lba) return false;
-    // Sectors left in this cluster run: up to the end of the cluster, then
-    // on while the next cluster follows on the card.
-    run = 0;
-    do
-    {
-      run++;
-    } while (run < count && sdr_lba(fsec + run) == lba + run);
+    fcl = fsec >> spc_shift;
+    if (fcl >= sdr_ncl) return false;
+    i = ext_of(fcl);
+    lba = sdr_ext[i].lba + ((fcl - sdr_ext[i].fcl) << spc_shift) + (fsec & (sdr_spc - 1));
+    // sectors up to the end of the extent: one CMD18 for them
+    left = ((i + 1 < sdr_next ? sdr_ext[i + 1].fcl : sdr_ncl) << spc_shift) - fsec;
+    run = left < count ? left : count;
     if (cmd(18, addr(lba)))
       ok = false;
     else
     {
-      u8 n;
-      for (n = 0; n < run; n++)
-      {
-        if (!wait_token())
-        {
-          ok = false;
-          break;
-        }
-        dma_block(page, offs);
-        offs += 512;
-      }
+      rb_n = run;
+      rb_page = page;
+      rb_offs = offs;
+      read_blocks();
+      ok = rb_ok;
+      offs = rb_offs;
       stop_read();
     }
     deselect();

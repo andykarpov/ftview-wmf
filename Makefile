@@ -13,7 +13,7 @@ $(BINARY): $(SRC) tools/build.py
 diag: build/SDRTEST.WMF
 
 build/SDRTEST.WMF: diag/sdrdiag.c diag/sdrdiag_h.c src/sdr.c src/sdr.h tools/build.py
-	nice -n 19 python3 -I tools/build.py --build-dir build/diag --header diag/sdrdiag_h.c -o $@ diag/sdrdiag.c src/sdr.c
+	nice -n 19 python3 -I tools/build.py --build-dir build/diag --data-loc 0xB000 --header diag/sdrdiag_h.c -o $@ diag/sdrdiag.c src/sdr.c
 
 venv:
 	python3 -m venv .venv

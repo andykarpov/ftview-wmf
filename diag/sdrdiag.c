@@ -18,7 +18,7 @@ u16 ret_sp;
 u32 filesize;
 u8 file_ext;
 u8 call_type;
-u8 buf[4096];
+u8 buf[2048];
 char text[640];
 
 const char *const names[] = {"OK", "EMPTY", "SAMPLE", "CHAIN", "CARD", "VOLUME",
@@ -181,7 +181,7 @@ void run()
     wc_api__bool(_GIPAGPL);
     for (sec = 0; sec < nsec && io_ok && !stopped; sec += n)
     {
-      n = nsec - sec < 8 ? nsec - sec : 8;
+      n = nsec - sec < 4 ? nsec - sec : 4;
       wc_load512(buf, n);
       if (!sdr_read(sec, n, page, 0)) { io_ok = false; break; }
       len = (filesize - (sec << 9)) < ((u16)n << 9) ? filesize - (sec << 9) : (u16)n << 9;

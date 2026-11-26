@@ -87,7 +87,7 @@ def abi_headers(abi):
         (abi / name).write_text(text)
 
 
-def build(out, target, sources, header):
+def build(out, target, sources, header, data_loc=DATA_LOC):
     check_vendor()
     sdcc, sdas = shutil.which('sdcc'), shutil.which('sdasz80')
     if not sdcc or not sdas:
@@ -109,7 +109,7 @@ def build(out, target, sources, header):
         rel = Path(src).stem + '.rel'
         run([sdcc] + common + inc + ['-c', str(src), '-o', rel], out, log)
         rels.append(rel)
-    cc = [sdcc] + common + ['crt0.rel', '--code-loc', hex(CODE_LOC), '--data-loc', hex(DATA_LOC)]
+    cc = [sdcc] + common + ['crt0.rel', '--code-loc', hex(CODE_LOC), '--data-loc', hex(data_loc)]
     run(cc + rels + libs + ['-o', 'out.ihx'], out, log)
     # The libraries of a newer SDCC put code into _HOME; with --code-loc the
     # linker places it after _DATA (past #C000), so it is linked again right
@@ -121,13 +121,13 @@ def build(out, target, sources, header):
     code_end = max(s + n for name, (s, n) in a.items()
                    if name in ('_HEADER0', '_HOME', '_CODE', '_INITIALIZER', '_GSINIT', '_GSFINAL') and n)
     data_end = max((s + n for name, (s, n) in a.items()
-                    if name in ('_DATA', '_INITIALIZED', '_BSEG', '_BSS') and n), default=DATA_LOC)
+                    if name in ('_DATA', '_INITIALIZED', '_BSEG', '_BSS') and n), default=data_loc)
     # crt0 does not run GSINIT: initialised non-const globals would stay zero.
     if a.get('_INITIALIZER', (0, 0))[1]:
         fail('initialised non-const globals (%d bytes of _INITIALIZER): make them const'
              % a['_INITIALIZER'][1])
-    if code_end > DATA_LOC:
-        fail('code ends at #%04X, past the data at #%04X' % (code_end, DATA_LOC))
+    if code_end > data_loc:
+        fail('code ends at #%04X, past the data at #%04X' % (code_end, data_loc))
     if data_end > PAGE_END:
         fail('data ends at #%04X, past #%04X' % (data_end, PAGE_END))
 
@@ -149,15 +149,16 @@ def build(out, target, sources, header):
         fail('header has no WildCommanderMDL magic')
     target.write_bytes(hdr + image)
     print('%s: %d bytes, code #8000..#%04X, data #%04X..#%04X, %d blocks' % (
-        target.name, len(hdr) + len(image), code_end, DATA_LOC, data_end, blocks))
+        target.name, len(hdr) + len(image), code_end, data_loc, data_end, blocks))
 
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('-o', '--output', default=str(ROOT / 'FTVIEW.WMF'))
     ap.add_argument('--build-dir', default=str(ROOT / 'build' / 'plugin'))
+    ap.add_argument('--data-loc', type=lambda s: int(s, 0), default=DATA_LOC)
     ap.add_argument('--header', default=str(ROOT / 'src/wc_h.c'))
     ap.add_argument('sources', nargs='*', default=[str(ROOT / s) for s in SOURCES])
     args = ap.parse_args()
     build(Path(args.build_dir), Path(args.output), [Path(s).resolve() for s in args.sources],
-          Path(args.header).resolve())
+          Path(args.header).resolve(), args.data_loc)
