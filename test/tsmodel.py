@@ -9,6 +9,7 @@ import z80
 
 API = 0x6006
 RET = 0x7000          # return address of the tested main()
+TXT_PAGE = 0x8F       # the text screen of WC
 
 
 class SDCard:
@@ -178,6 +179,12 @@ class Machine:
         m.pc = m.memory[m.sp] | m.memory[m.sp + 1] << 8
         m.sp += 2
 
+    def map_c000(self, new):
+        m = self.cpu
+        self.pages[m.memory[0x6003]] = bytearray(m.memory[0xC000:0x10000])
+        m.set_memory_block(0xC000, bytes(self.page(new)))
+        m.memory[0x6003] = new
+
     def api(self):
         m = self.cpu
         a = m.a
@@ -199,13 +206,14 @@ class Machine:
                 if de >= end:
                     break
         elif a == 0x00:                     # MNGC_PL: plugin page A' at #C000
-            new = 0x90 + (m.alt_a & 0x3F)
-            self.pages[m.memory[0x6003]] = bytearray(m.memory[0xC000:0x10000])
-            m.set_memory_block(0xC000, bytes(self.page(new)))
-            m.memory[0x6003] = new
+            self.map_c000(0x90 + (m.alt_a & 0x3F))
         elif a == 0x17:                     # ESC: not pressed (Z)
             m.f |= 0x40
-        elif a in (0x01, 0x02, 0x2E, 0x2F): # windows, keys
+        elif a in (0x01, 0x02, 0x03):       # PRWOW / RRESB / PRSRW: a real window in IX
+            assert m.memory[m.ix] == 1 and m.memory[m.ix + 4], 'window at %#x is empty' % m.ix
+            self.map_c000(TXT_PAGE)         # they leave the text page of WC in #C000
+            m.memory[0xC000] ^= 0xFF        # and draw into it
+        elif a in (0x0E, 0x0F, 0x2E, 0x2F): # clock, screen, keys
             pass
         else:
             raise AssertionError('WC API %#x' % a)
@@ -219,9 +227,10 @@ class Machine:
         m.set_memory_block(m.sp, RET.to_bytes(2, 'little'))
         m.pc = self.sym['_main']
         while self.ticks < limit:
-            m.ticks_to_stop = 1_000_000
+            m.ticks_to_stop = 70_000
             m.run()
-            self.ticks += 1_000_000 - m.ticks_to_stop
+            self.ticks += 70_000 - m.ticks_to_stop
+            m.memory[0x6009] = (self.ticks // 280_000) & 0xFF   # frames of WC at 14 MHz
             if m.pc == RET:
                 assert self.conf == 0x03, 'chip select left on: #77 = %#x' % self.conf
                 return

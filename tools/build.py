@@ -122,6 +122,10 @@ def build(out, target, sources, header):
                    if name in ('_HEADER0', '_HOME', '_CODE', '_INITIALIZER', '_GSINIT', '_GSFINAL') and n)
     data_end = max((s + n for name, (s, n) in a.items()
                     if name in ('_DATA', '_INITIALIZED', '_BSEG', '_BSS') and n), default=DATA_LOC)
+    # crt0 does not run GSINIT: initialised non-const globals would stay zero.
+    if a.get('_INITIALIZER', (0, 0))[1]:
+        fail('initialised non-const globals (%d bytes of _INITIALIZER): make them const'
+             % a['_INITIALIZER'][1])
     if code_end > DATA_LOC:
         fail('code ends at #%04X, past the data at #%04X' % (code_end, DATA_LOC))
     if data_end > PAGE_END:
@@ -151,7 +155,7 @@ def build(out, target, sources, header):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('-o', '--output', default=str(ROOT / 'FTVIEW.WMF'))
-    ap.add_argument('--build-dir', default=str(ROOT / 'build'))
+    ap.add_argument('--build-dir', default=str(ROOT / 'build' / 'plugin'))
     ap.add_argument('--header', default=str(ROOT / 'src/wc_h.c'))
     ap.add_argument('sources', nargs='*', default=[str(ROOT / s) for s in SOURCES])
     args = ap.parse_args()
