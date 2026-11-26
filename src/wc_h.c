@@ -8,7 +8,7 @@ static const WC_HDR hdr =
   /* +16 Magic string        */   {'W', 'i', 'l', 'd', 'C', 'o', 'm', 'm', 'a', 'n', 'd', 'e', 'r', 'M', 'D', 'L'},
   /* +32 Format version      */   7,
   /* +33 -reserved-          */   "",
-  /* +34 Number of pages     */   11, // три банка кода и восемь страниц буфера EVO
+  /* +34 Number of pages     */   11, // code banks 0 images, 9 video, 10 I/O; buffer pages 1..8
   /* +35 Page at 0x8000      */   0,
   /* +36 Page definitions    */   {
   /*  +0 Page, +1 NBlocks    */     {0, N_BLK0}, {9, N_BLK9}, {10, N_BLK10}, {1, 0}
@@ -19,9 +19,7 @@ static const WC_HDR hdr =
   /*                         */     {'P', 'N', 'G'},
   /*                         */     {'D', 'L', 'S'},
   /*                         */     {'D', 'X', 'P'},
-  /*                         */     {'A', 'V', 'I'},
-  /*                         */     {'X', 'M', ' '},
-  /*                         */     {'X', 'M', 'Z'}
+  /*                         */     {'A', 'V', 'I'}
   /*                         */   },
   /* +160 0x00               */   "",
   /* +161 Max file size      */   0xFFFFFFFF,

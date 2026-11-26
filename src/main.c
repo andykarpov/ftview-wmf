@@ -8,13 +8,12 @@
 #include <tslib.h>
 #include <wc_api.h>
 #include "tsconf.h"
-#include <esp_spi_defs.h>
 
 #include <build_id.h>
 #include <wc_api.c>
-#if !defined(FTVIEW_VIDEO_BANK) && !defined(FTVIEW_LIST_BANK)
-#include <esp32.c>
-#endif
+#include "sdr.h"
+#include "io_bank.h"
+#include "avi_shared.h"
 
 typedef struct
 {
@@ -54,14 +53,11 @@ typedef struct
 // Чтение восьми секторов за вызов уменьшает накладные расходы LOAD512/FAT.
 // Код, cmdl и состояние остаются в #8000..#BFFF, отдельно от файловых данных.
 __at (0xC000) u8 fs_buf[0x4000];
-// Банку списка не нужен: команды его окна — в странице буфера (avi_list.c).
-#ifndef FTVIEW_LIST_BANK
 u8 cmdl[0x180];
-#endif
 
 // У плагина нет стандартного CRT: инициализируем состояние явно при входе.
 // Запись через приведение указателя к const запрещена правилами C.
-u8 state_ft, state_esp, graphics_active;
+u8 state_ft, graphics_active;
 // Единственные общие данные двух банков кода. При переходе через API 79
 // адреса не меняются; обычные глобальные переменные новый банк создаёт заново.
 // Диапазон закреплён проверками сборки и не пересекается с DATA/буфером #C000.
@@ -79,7 +75,21 @@ __at (0xBFEC) u8 gs_loaded;
 // бит 7 — видеосреда WC уже изменена и требует восстановления.
 __at (0xBFED) u8 ft_state;
 void wc_video_bank();
-void far_call(u8 page, void *param);
+// far_entry of bank page with a parameter block in #C000; back to this bank
+// (the gate _far_gate of crt0 takes the page to return to in C).
+#ifdef FTVIEW_VIDEO_BANK
+#define BANK_PAGE 9
+#else
+#define BANK_PAGE 0
+#endif
+void far_call(u8 page, void *param) __naked
+{
+  page; param;
+  __asm
+    ld c, #BANK_PAGE
+    jp _far_gate
+  __endasm;
+}
 
 // Признак неудачной загрузки текущего файла. Сбрасывается при входе в плагин;
 // нужен для общего выхода в WC после ошибки чтения, формата или сопроцессора.
@@ -99,12 +109,36 @@ void fail(u8 at)
 // округляя только запрос к WC до целых секторов. Возвращаем true лишь если
 // LOAD512 продвинул указатель на весь запрошенный объём. Последний неполный
 // сектор допустим, но его байты за EOF потребитель не должен передавать FT812.
+// File I/O: sectors into fs_buf (#C000 of the mapped buffer page). An AVI
+// with the SD reader (avi.io) reads at avi.disk: the image bank itself, the
+// video bank through it (AVI_OP_READ); otherwise the stream of WC (LOAD512).
+// The reader is in the I/O bank: it needs buffer page 1 in #C000 (its state
+// and the block), the data go by DMA into the page that was mapped. Page 1
+// stays mapped after the call.
+extern AVI_SHARED avi;
+bool io_read(u8 sectors)
+{
+  u8 page;
+  if (!avi.io)
+    return wc_load512(fs_buf, sectors) == (u16)fs_buf + ((u16)sectors << 9);
+  page = *(u8*)_PAGE3;
+  wc_map_buffer(1);
+  IO_FAR->op = IO_READ;
+  IO_FAR->fsec = avi.disk;
+  IO_FAR->n = sectors;
+  IO_FAR->page = page;
+  IO_FAR->offs = 0;
+  far_call(IO_PAGE, IO_FAR);
+  if (!IO_FAR->ok) return false;
+  avi.disk += sectors;
+  return true;
+}
+
 bool read_chunk(u32 left)
 {
   u16 count = min(left, FS_BUF_SIZE);
   u8 sectors = (count + 511) >> 9;
-  if (!count || *(volatile u8*)_ABT ||
-      wc_load512(fs_buf, sectors) != (u16)fs_buf + ((u16)sectors << 9))
+  if (!count || *(volatile u8*)_ABT || !io_read(sectors))
   {
     fail(1);
     return false;
@@ -170,11 +204,6 @@ bool fifo_flush()
   return fifo_send((u8*)ft_ccmdb, count);
 }
 
-#ifdef FTVIEW_LIST_BANK
-// Банк списка роликов (страница 10): общие определения и обмен с FT812 выше,
-// остальное — только его (чтение каталога, окно выбора).
-#include "avi_list.c"
-#else
 #include "gs_zx.c"
 
 // Остановка звука FT812 (кольцо PCM без GS и звук штатного PLAYVIDEO).
@@ -239,14 +268,12 @@ enum
   EXT_DLS,
   EXT_DXP,
   EXT_AVI,
-  EXT_XM,
-  EXT_XMZ,
 };
 
 // --- Windows ------------------------------
 // В видеобанке окон нет: их показывает банк списка (list_error) — здесь на
 // них уже не хватает места. У банка списка свои копии (avi_list.c).
-#if !defined(FTVIEW_VIDEO_BANK) && !defined(FTVIEW_LIST_BANK)
+#ifndef FTVIEW_VIDEO_BANK
 const WC_TX_WINDOW err_no_ft =
 {
   /* window with header and text   */  WC_WIND_HDR_TXT,
@@ -262,20 +289,6 @@ const WC_TX_WINDOW err_no_ft =
   /* window text                   */  "\x0E\x0C\x01" "No VDAC2 detected!",
 };
 
-const WC_TX_WINDOW err_no_esp =
-{
-  /* window with header and text   */  WC_WIND_HDR_TXT,
-  /* cursor color mask             */  0,
-  /* X,Y (position)                */  24, 10,
-  /* W,H (size)                    */  32, 5,
-  /* paper/ink (window color)      */  0x2F,
-  /* -reserved-                    */  0,
-  /* window restore buffer address */  0,
-  /* separators                    */  0, 0,
-  /* header text                   */  "\x0E" " Error! ",
-  /* footer text                   */  "",
-  /* window text                   */  "\x0E\x0C\x01" "No ESP32 detected!",
-};
 #endif
 
 // Сообщение остаётся на текстовом экране WC; повреждённый файл не должен
@@ -355,16 +368,6 @@ bool vdac2_init()
   return true;
 }
 
-bool esp_init()
-{
-  esp_cmd(ESP_CMD_NOP);
-  esp_rd_end();
-  esp_wr_end();
-
-  // +++ detect
-
-  return true;
-}
 #endif
 
 #ifndef FTVIEW_VIDEO_BANK
@@ -399,6 +402,45 @@ u32 avi_word()
   value |= (u32)header_byte() << 16;
   value |= (u32)header_byte() << 24;
   return value;
+}
+#endif
+
+#ifndef FTVIEW_VIDEO_BANK
+// The message windows of the AVI player, from the list bank of WC Improved.
+// The last two digits of err_avi are the place the player gave up (fail_at).
+const WC_TX_WINDOW err_codec =
+{
+  WC_WIND_HDR_TXT, 0, 19, 10, 42, 7, 0x2F, 0, 0, 0, 0,
+  "\x0E" " Cannot play video ", "",
+  "\x0E\x0C\x01" "Unsupported video codec.\r"
+  "\x0E\x0C\x02" "FTView plays MJPEG AVI."
+};
+
+const WC_TX_WINDOW err_avi =
+{
+  WC_WIND_HDR_TXT, 0, 19, 10, 42, 8, 0x2F, 0, 0, 0, 0,
+  "\x0E" " Cannot display file ", "",
+  "\x0E\x0C\x01" "Unsupported, damaged or too large.\r"
+  "\x0E\x0C\x02" "FT812 image memory: 1 MiB.\r"
+  "\x0E\x0C\x03" "Build " BUILD_ID "   Reason 00"
+};
+
+void avi_message(u8 msg, u8 code)
+{
+  const WC_TX_WINDOW *window = msg == AVI_MSG_CODEC ? &err_codec :
+                               msg == AVI_MSG_NOFT ? &err_no_ft : &err_avi;
+  if (msg == AVI_MSG_FILE)
+  {
+    // The text is in the RAM of the bank page: the digits are set in place.
+    char *s = (char*)err_avi.wnd_txt;
+    while (*s) ++s;
+    s[-2] = '0' + code / 10;
+    s[-1] = '0' + code % 10;
+  }
+  wc_api_u16(_PRWOW, (u16)window);
+  wc_api__bool(_USPO);
+  wc_api__bool(_NUSP);
+  wc_api_u16(_RRESB, (u16)window);
 }
 #endif
 
@@ -631,8 +673,7 @@ void show_dls()
 
 // Штатное воспроизведение со звуком использует то же двухступенчатое чтение:
 // упреждающий буфер в собственных страницах EVO -> media FIFO FT812.
-// Enter в плеере открывает список роликов каталога; выбор другого ставит
-// avi_switch, и цикл запускает его заново (avi.cluster и avi.size уже его).
+// The list of the videos (Enter) is not built here (avi_list).
 void show_avi()
 {
   wc_video_clock(1);
@@ -659,50 +700,6 @@ void show_avi()
 }
 #endif
 
-#ifndef FTVIEW_VIDEO_BANK
-void play_xm()
-{
-  esp_cmd(ESP_CMD_XM_STOP);
-  esp_wait_busy(10000);
-  esp_cmd(ESP_CMD_KILL_OBJECTS);
-  esp_wait_busy(10000);
-  
-  u8 h = esp_create_obj(filesize, (file_ext == EXT_XM) ? OBJ_TYPE_XM : OBJ_TYPE_ZIP);
-
-  u32 sz = filesize;
-  u32 offs = 0;
-
-  while (sz)
-  {
-    u32 s = min(sz, FS_BUF_SIZE);
-    u8 sec = (s + 511) >> 9;
-
-    if (!read_chunk(sz)) return;
-
-    esp_wr_reg32(ESP_REG_DATA_SIZE, s);
-    esp_wr_reg32(ESP_REG_DATA_OFFSET, offs);
-    esp_cmd(ESP_CMD_WRITE_OBJECT);
-    esp_wait_status(ESP_ST_DATA_M2S, 2000);
-    esp_send_dma((u16)fs_buf, *(u8*)_PAGE3, 512, sec);
-
-    offs += s;
-    sz -= s;
-  }
-
-  if (file_ext == EXT_XMZ)
-  {
-    esp_wr_reg8(ESP_REG_OBJ_TYPE, OBJ_TYPE_XM);
-    esp_wr_reg32(ESP_REG_DATA_SIZE, filesize);
-    esp_cmd(ESP_CMD_UNZIP);
-    esp_wait_busy(10000);
-  }
-  
-  esp_cmd(ESP_CMD_XM_INIT);
-  esp_wait_busy(10000);
-  esp_cmd(ESP_CMD_XM_PLAY);
-  esp_wait_busy(10000);
-}
-#endif
 
 // --- Aux functions ------------------------
 // Окно закрывает любая клавиша — теми же вызовами WC, что и его собственные
@@ -728,22 +725,6 @@ void main_start()
   // ABT — накопленный флаг, не текущее состояние клавиши. WC не сбрасывает
   // его перед каждым плагином: старый Esc не должен отменять новый просмотр.
   *(volatile u8*)_ABT = 0;
-  // Audio player
-#ifndef FTVIEW_VIDEO_BANK
-  if (file_ext == EXT_XM || file_ext == EXT_XMZ)
-  {
-    if (!state_esp)
-      state_esp = esp_init() ? 1 : 2;
-
-    if (state_esp != 1)
-      show_window(&err_no_esp);
-    else
-      play_xm();
-  }
-
-  // Viewer
-  else
-#endif
   {
 #ifndef FTVIEW_VIDEO_BANK
     if (!state_ft)
@@ -757,8 +738,8 @@ void main_start()
 #ifndef FTVIEW_VIDEO_BANK
       show_window(&err_no_ft);
 #else
-      // Окно показывает банк списка: в видеобанке для него нет места.
-      { list_error(LIST_OP_NOFT); wc_exit(WC_EXIT); }
+      // The image bank shows the window: the video bank has no room.
+      { list_error(AVI_MSG_NOFT); wc_exit(WC_EXIT); }
 #endif
 
     else switch (file_ext)
@@ -792,8 +773,8 @@ void main_start()
 #ifndef FTVIEW_VIDEO_BANK
       show_window(view_failed == VIEW_TOO_LARGE ? &err_size : &err_file);
 #else
-      // Окно показывает банк списка и возвращает управление сюда.
-      list_error(view_failed == VIEW_CODEC ? LIST_OP_CODEC : LIST_OP_FILE);
+      // The image bank shows the window and returns here.
+      list_error(view_failed == VIEW_CODEC ? AVI_MSG_CODEC : AVI_MSG_FILE);
 #endif
     wc_exit(WC_EXIT);
   }
@@ -822,8 +803,6 @@ void main_start()
     if (wc_api__bool(_ESC))   // Esc - exit
       wc_exit(WC_EXIT);
 
-    if ((file_ext == EXT_XM) || (file_ext == EXT_XMZ))
-      wc_exit(WC_EXIT);
   }
 }
 
@@ -866,6 +845,13 @@ void main_dispatch()
   // Драйвер GS загружается здесь: его код не занимает место видеобанка.
   if (call_type == WC_CALL_EXT && file_ext == EXT_AVI)
   {
+    // The SD reader (sdr.c): its state goes to buffer page 1, the video
+    // bank checks sdr.next (avi_first). Without it the stream of WC plays
+    // the video, without the seek table.
+    wc_map_buffer(1);
+    IO_FAR->op = IO_OPEN;
+    IO_FAR->size = filesize;
+    far_call(IO_PAGE, IO_FAR);
     gs_loaded = gs_boot();
     graphics_active = 0;
     ft_state = (vdac2_init() ? 1 : 2) | gs_stage << 2;
@@ -874,7 +860,7 @@ void main_dispatch()
   }
 #endif
   view_failed = 0;
-  state_ft = state_esp = graphics_active = 0;
+  state_ft = graphics_active = 0;
 #ifndef FTVIEW_VIDEO_BANK
   switch (call_type)
   {
@@ -895,4 +881,3 @@ void main_dispatch()
 #endif
 }
 
-#endif // FTVIEW_LIST_BANK

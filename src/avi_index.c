@@ -35,13 +35,13 @@ AVI_SHARED avi;
 #define avi_width avi.width
 #define avi_height avi.height
 
-// Начало текущего ролика: GIPAG по его первому кластеру. API 50 (GIPAGPL)
-// вернул бы поток к файлу, с которым WC запустил плагин, а после выбора в
-// списке (Enter) играет уже другой. Банк изображений получает кластер в
-// копии AVI_SHARED (far_entry).
+// The start of the video: the SD reader at sector 0, or the stream of WC on
+// the first sector of the file (GIPAGPL: the file WC started the plugin with;
+// without the reader there is no other video to switch to).
 bool avi_rewind()
 {
-  return wc_gipag(&avi.cluster);
+  avi.disk = 0;
+  return avi.io || wc_rewind();
 }
 
 #ifndef FTVIEW_VIDEO_BANK
@@ -50,193 +50,13 @@ bool avi_rewind()
 u8 index_state;
 u16 index_step, index_count;
 
-// Пропуск секторов от начала файла (сразу после avi_rewind, на границе
-// кластера). LOADNON ядра на каждый кластер заново читает сектор FAT (CURIT
-// без кэша): на файле 52 МБ с кластером 4 КиБ это 12 808 чтений SD, и первая
-// перемотка в Unreal шла ~30 с. Поэтому цепочку проходит сам плагин. CURIT
-// (#44A5, вход для внешних плагинов) читает сектор FAT в SECBU один раз на
-// 128 кластеров, следующие записи берутся из SECBU (#3000) напрямую: страница
-// WildDOS стоит в окне #0000, пока работает плагин (#6000 = #600B). Поток на
-// итоговый кластер ставит GIPAG (#44D7), остаток кластера дочитывается
-// LOAD512. От LOADNON пропуск не зависит: до исправления ядра 2026-09-21 он
-// проходил ~81 блок за вызов вместо B.
-#define WD_SECBU  0x3000
-#define WD_BSECPC 0x3894
-#define WD_CUHL   0x38A8
-u32 fw_cluster, fw_count;
-u8 fw_base[4], fw_rest;
-
-// fw_count — секторы от начала текущего кластера потока (CUHL/CUDE). Делит
-// их на BSECPC (степень двойки): остаток — в fw_rest, целые кластеры
-// проходит по цепочке и ставит поток на итоговый кластер (GIPAG). fw_base —
-// кластер без младших 7 бит, чей сектор FAT сейчас в SECBU. Возврат 1; 0 —
-// CURIT не прочитал FAT, ссылка не кластер (0, 1, повреждённый, конец
-// цепочки раньше срока) или GIPAG не встал. Деление здесь, а не в C: SDCC 4.3
-// проверял результат переменного сдвига через IY, заданный лишь в теле цикла.
-bool fat_walk() __naked
-{
-  __asm
-    push ix
-    push iy
-    ld a, (0x3894)
-    ld c, a
-    dec a
-    ld b, a
-    ld a, (_fw_count)
-    and b
-    ld (_fw_rest), a
-    ld hl, (_fw_count)
-    ld de, (_fw_count + 2)
-00010$:
-    srl c
-    jr c, 00011$
-    srl d
-    rr e
-    rr h
-    rr l
-    jr 00010$
-00011$:
-    ld (_fw_count), hl
-    ld (_fw_count + 2), de
-    ld a, h
-    or l
-    or d
-    or e
-    jp z, 00008$
-    ld hl, (0x38A8)
-    ld de, (0x38AA)
-00001$:
-    ld a, l
-    and #0x80
-    ld (_fw_base), a
-    ld a, h
-    ld (_fw_base + 1), a
-    ld (_fw_base + 2), de
-    call 0x44A5
-    jp c, 00009$
-00002$:
-    ld c, (hl)
-    inc hl
-    ld b, (hl)
-    inc hl
-    ld e, (hl)
-    inc hl
-    ld a, (hl)
-    and #0x0F
-    ld d, a
-    or e
-    jr nz, 00003$
-    ld a, b
-    or a
-    jr nz, 00004$
-    ld a, c
-    cp #2
-    jp c, 00009$
-    jr 00004$
-00003$:
-    ld a, d
-    cp #0x0F
-    jr nz, 00004$
-    ld a, e
-    and b
-    inc a
-    jr nz, 00004$
-    ld a, c
-    cp #0xF7
-    jp nc, 00009$
-00004$:
-    ld (_fw_cluster), bc
-    ld (_fw_cluster + 2), de
-    ld hl, (_fw_count)
-    ld a, h
-    or l
-    jr nz, 00005$
-    ld hl, (_fw_count + 2)
-    dec hl
-    ld (_fw_count + 2), hl
-    ld hl, #0
-00005$:
-    dec hl
-    ld (_fw_count), hl
-    ld a, h
-    or l
-    jr nz, 00006$
-    ld hl, (_fw_count + 2)
-    ld a, h
-    or l
-    jr z, 00012$
-00006$:
-    ld a, c
-    and #0x80
-    ld hl, #_fw_base
-    cp (hl)
-    jr nz, 00007$
-    inc hl
-    ld a, b
-    cp (hl)
-    jr nz, 00007$
-    inc hl
-    ld a, e
-    cp (hl)
-    jr nz, 00007$
-    inc hl
-    ld a, d
-    cp (hl)
-    jr nz, 00007$
-    ld a, c
-    and #0x7F
-    ld l, a
-    ld h, #0
-    add hl, hl
-    add hl, hl
-    ld a, h
-    add a, #0x30
-    ld h, a
-    jp 00002$
-00007$:
-    ld l, c
-    ld h, b
-    jp 00001$
-00012$:
-    ld hl, #_fw_cluster
-    call 0x44D7
-    jr nz, 00009$
-00008$:
-    pop iy
-    pop ix
-    ld a, #1
-    ret
-00009$:
-    pop iy
-    pop ix
-    xor a
-    ret
-  __endasm;
-}
-
+// Skip sectors of the file (after avi_rewind): the SD reader only moves its
+// position. The stream of WC cannot skip without internals (LOADNON is
+// reserved in the stock WC), so there is no seek table without the reader.
 bool disk_skip(u32 sectors)
 {
-  u8 spc = *(u8*)WD_BSECPC, n;
-  if (*(u8*)0x6000 != *(u8*)0x600B || !spc || (spc & (spc - 1)))
-  {
-    // WildDOS не в окне #0000: прежний пропуск через API.
-    while (sectors)
-    {
-      n = sectors > 255 ? 255 : sectors;
-      if (!wc_skip512(n)) { view_failed = 1; return false; }
-      sectors -= n;
-    }
-    return true;
-  }
-  fw_count = sectors;
-  if (!fat_walk()) { view_failed = 1; return false; }
-  while (fw_rest)
-  {
-    n = fw_rest > 31 ? 31 : fw_rest;
-    if (wc_load512(fs_buf, n) != 0xC000 + ((u16)n << 9))
-    { view_failed = 1; return false; }
-    fw_rest -= n;
-  }
+  if (!avi.io) { view_failed = 1; return false; }
+  avi.disk += sectors;
   return true;
 }
 
@@ -772,6 +592,8 @@ void index_build(AVI_SHARED *p)
   ib_fps = p->rate;
   index_state = 2;
   ib_exit = 1;
+  // The table and the seek need the SD reader (disk_skip).
+  if (!avi.io) return;
   // Кадры над таблицей; заголовок до 'movi' повторно подаётся в FIFO и
   // ограничен 64 КиБ; для звука нужна целая частота кадров.
   if (p->bytes > AVI_INDEX / 2 || p->movi_start > 0x10000UL ||
@@ -983,23 +805,41 @@ bool avi_probe()
          avi_bytes <= AVI_RESULT / 2;
 }
 
+// The codec by the start of the file in fs_buf (from the list bank of WC
+// Improved): 1 — the first strh is MJPG video (any case of the FOURCC), 0 —
+// another codec, 2 — nothing to judge by (not RIFF/AVI, no strh).
+u8 buf_codec()
+{
+  u8 *q;
+  if (memcmp(fs_buf, "RIFF", 4) || memcmp(fs_buf + 8, "AVI ", 4)) return 2;
+  for (q = fs_buf + 12; q < fs_buf + 496; ++q)
+    if (q[0] == 's' && q[1] == 't' && q[2] == 'r' && q[3] == 'h')
+      return !memcmp(q + 8, "vids", 4) && (q[12] | 32) == 'm' && (q[13] | 32) == 'j' &&
+             (q[14] | 32) == 'p' && (q[15] | 32) == 'g';
+  return 2;
+}
+
 void far_entry(AVI_SHARED *p)
 {
   view_failed = 0;
-  avi.cluster = p->cluster;
   filesize = p->size;
-  if (p->op == AVI_OP_SEEK) index_seek(p);
+  avi.io = p->io;
+  avi.disk = p->disk;
+  if (p->op == AVI_OP_MJPEG) p->ok = buf_codec() != 0;
+  else if (p->op == AVI_OP_MSG) avi_message(p->msg, p->code);
+  else if (p->op == AVI_OP_SEEK) index_seek(p);
   else if (p->op == AVI_OP_HEADER) p->ok = index_header(p) && !view_failed;
   else if (p->op == AVI_OP_PROBE)
   {
     // Разбор — первое, что делается с файлом: таблица перемотки прежнего
-    // ролика (Enter в плеере выбрал другой) недействительна.
+    // ролика недействительна.
     index_state = 0;
     avi = *p;
     avi.ok = avi_probe();
     if (view_failed) avi.ok = 2;
     *p = avi;
   }
+  p->disk = avi.disk;
 }
 
 #else

@@ -14,10 +14,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Tools (SDCC 4.2.0 of Ubuntu 24.04, dosfstools, mtools, python venv)
+      - name: Tools (SDCC 4.4.0 binary of sdcc.sourceforge.net, dosfstools, mtools, python venv)
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q sdcc dosfstools mtools
+          sudo apt-get install -y -q dosfstools mtools
+          curl -sSL -o sdcc.tar.bz2 https://sourceforge.net/projects/sdcc/files/sdcc-linux-amd64/4.4.0/sdcc-4.4.0-amd64-unknown-linux2.5.tar.bz2/download
+          echo "488a81eb8d762d2754d4e3fac83d202d  sdcc.tar.bz2" | md5sum -c
+          mkdir -p ~/.local/opt && tar xjf sdcc.tar.bz2 -C ~/.local/opt
           python3 -m venv .venv
           .venv/bin/pip install -q -r requirements.txt
       - name: Build

@@ -4,7 +4,7 @@
 	.globl	_main_dispatch
 	.globl	_far_entry
 	.globl	_wc_video_bank
-	.globl	_far_call
+	.globl	_far_gate
 	.globl	_ret_sp
 
 	.area	_HEADER (ABS)
@@ -48,24 +48,26 @@ _wc_video_bank:
 	djnz 00002$
 	jp _main_dispatch
 
-; Видеобанк вызывает far_entry другого банка: A — его страница (0 — банк
-; изображений, 10 — банк списка роликов), DE — адрес блока параметров в окне
-; #C000 (оно общее для банков). Возврат — только через блок: A и DE портит
-; обратное переключение. IX/IY сохраняются.
-_far_call:
+; far_entry of another bank: A — its page (0 images, 9 video, 10 I/O), DE —
+; the parameter block in the window #C000 (the same in all banks), C — the
+; page to come back to (far_call of each bank sets it). The result is only in
+; the block: the switch back spoils A and DE. IX / IY are kept.
+_far_gate:
 	push ix
 	push iy
+	push bc
 	push de
 	ex af, af'
-	ld a, #79		; API 79 MNG8_PL (десятичный номер)
+	ld a, #79		; API 79 MNG8_PL (decimal)
 	call 0x6006
 	pop hl
 	push hl
 	call 0x8003
 	pop hl
-	ld a, #9
+	pop bc
+	ld a, c
 	ex af, af'
-	ld a, #79		; API 79 MNG8_PL (десятичный номер)
+	ld a, #79		; API 79 MNG8_PL (decimal)
 	call 0x6006
 	pop iy
 	pop ix

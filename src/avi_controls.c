@@ -6,7 +6,6 @@
 // Неподдержанный звук остаётся у штатного CMD_PLAYVIDEO: этот режим не должен
 // молча выключать звук. Проверка возможности управления выполняется до старта.
 
-#include "avi_list.h"
 
 #define AVI_FIFO 0xE0000UL
 #define AVI_FIFO_SIZE 0x20000UL
@@ -75,8 +74,7 @@ bool avi_cache_fill()
   count = min(avi_disk_left, AVI_CACHE_BYTES);
   sectors = (count + 511) >> 9;
   wc_map_buffer(avi_cache_tail);
-  if (*(volatile u8*)_ABT ||
-      wc_load512(fs_buf, sectors) != 0xC000 + ((u16)sectors << 9))
+  if (*(volatile u8*)_ABT || !io_read(sectors))
   { fail(3); return false; }
   avi_disk_left -= count;
   if (++avi_cache_tail == 9) avi_cache_tail = 1;
@@ -289,9 +287,13 @@ void avi_time(u16 x, u16 seconds)
 // картинки, шаг полосы и полное время.
 u16 hud_bar, hud_total;
 u32 hud_unit;
-// Растяжение кадра на экран. Одной структурой: ту же картинку под окном
-// списка рисует банк списка, блок параметров получает копию (avi_list).
-LIST_VIEW hud_v;
+// Растяжение кадра на экран.
+typedef struct
+{
+  u16 w, h;           // размер на экране
+  u32 ta, te;         // BITMAP_TRANSFORM_A/E
+} HUD_VIEW;
+HUD_VIEW hud_v;
 #define hud_w hud_v.w
 #define hud_h hud_v.h
 #define hud_ta hud_v.ta
@@ -515,56 +517,41 @@ bool avi_seek(u32 target)
 // сэмпл, а не округлённый кадр; продолжение не повторяет его звуковое начало.
 // GS держит позицию сам: пауза и продолжение — его команды, без перезапуска.
 // Неподдержанная аудиодорожка остаётся у штатного PLAYVIDEO со звуком.
-// Первый ролик — файл, с которым WC запустил плагин. API 50 (GIPAGPL) ставит
-// поток ядра на его начало, а текущий кластер потока ядро держит в CUHL/CUDE
-// (#38A8, страница WildDOS в окне #0000): оттуда же его берёт перемотка.
-// API 51 (TENTRY) не подходит: по #7F6B WC хранит имя файла, а не запись
-// каталога. Дальше avi.cluster меняет список роликов.
+// The file WC started the plugin with: the SD reader when sdr_open (image
+// bank, main_dispatch) found it, its state is in buffer page 1; otherwise
+// the stream of WC from the start of the file (GIPAGPL).
 void avi_first()
 {
-  wc_rewind();
-  avi.cluster = *(u32*)0x38A8;
+  wc_map_buffer(1);
+  avi.io = sdr.next != 0;
+  avi.disk = 0;
   avi.size = filesize;
+  if (!avi.io) wc_rewind();
 }
 
-// Список роликов каталога (банк списка, страница 10) поверх кадра address.
-// true — выбран ролик (Enter, в том числе текущий): avi.cluster и avi.size
-// уже его (банк списка пишет их в копию AVI_FAR), avi_switch просит
-// show_avi запустить его с начала. false — Esc.
+// The list of the videos of the directory (Enter, the end of a video) is
+// not built here: the list bank of WC Improved reads the directory through
+// WildDOS internals. The player stays paused on the frame.
 u8 avi_switch;
 bool avi_list(u32 address)
 {
-  wc_map_buffer(1);
-  *AVI_FAR = avi;
-  LIST_FAR->op = LIST_OP_PICK;
-  LIST_FAR->address = address;
-  LIST_FAR->view = hud_v;
-  far_call(LIST_PAGE, LIST_FAR);
-  wc_map_buffer(1);
-  avi = *AVI_FAR;
-  return avi_switch = LIST_FAR->chosen;
+  address;
+  return avi_switch = 0;
 }
 
-// Кодек ролика проверяет банк списка тем же правилом, что и список: в
-// видеобанке места на проверку нет. Начало файла уже прочитано в fs_buf
-// (страница буфера 1), лишнего чтения с SD не будет.
+// The codec by the start of the file in fs_buf (buffer page 1): the image
+// bank checks it, the video bank has no room.
 bool avi_mjpeg()
 {
-  wc_map_buffer(1);
-  LIST_FAR->op = LIST_OP_MJPEG;
-  far_call(LIST_PAGE, LIST_FAR);
-  wc_map_buffer(1);
-  return LIST_FAR->chosen;
+  return avi_far(AVI_OP_MJPEG);
 }
 
-// Окно сообщения показывает банк списка (в видеобанке для него нет места) и
-// возвращает управление: выход в WC делает вызывающий.
-void list_error(u8 op)
+// A message window of the image bank until a key; the caller exits to WC.
+void list_error(u8 msg)
 {
-  wc_map_buffer(1);
-  LIST_FAR->op = op;
-  LIST_FAR->code = fail_at;
-  far_call(LIST_PAGE, LIST_FAR);
+  avi.msg = msg;
+  avi.code = fail_at;
+  avi_far(AVI_OP_MSG);
 }
 
 bool avi_controls()

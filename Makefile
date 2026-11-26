@@ -1,4 +1,5 @@
 # FTVIEW.WMF: Wild Commander plugin, the FT812 viewer of TS-Conf (Karabas Go / Mini G, ZX Evolution + VDAC2)
+# SDCC 4.3+ (tools/build.py: $SDCC_HOME, default ~/.local/opt/sdcc-4.4.0)
 SRC=$(wildcard src/*.c src/*.h src/*.s) $(wildcard vendor/*/*)
 BINARY=FTVIEW.WMF
 # python with intelhex, z80, Pillow (the tests): make venv
