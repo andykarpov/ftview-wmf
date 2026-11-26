@@ -1,5 +1,5 @@
 
-bool wc_api__bool(u8 a) __naked
+bool wc_api__bool(u8 a) __sdcccall(0) __naked
 {
   a;  // to avoid SDCC warning
   __asm
@@ -14,7 +14,7 @@ bool wc_api__bool(u8 a) __naked
   __endasm;
 }
 
-void wc_api_u16(u8 a, u16 b) __naked
+void wc_api_u16(u8 a, u16 b) __sdcccall(0) __naked
 {
   a;  // to avoid SDCC warning
   b;  // to avoid SDCC warning
@@ -32,7 +32,7 @@ void wc_api_u16(u8 a, u16 b) __naked
   __endasm;
 }
 
-bool wc_vmode(u8 a) __naked
+bool wc_vmode(u8 a) __sdcccall(0) __naked
 {
   a;  // to avoid SDCC warning
   __asm
@@ -45,7 +45,7 @@ bool wc_vmode(u8 a) __naked
   __endasm;
 }
 
-u16 wc_load512(u8 *a, u8 b) __naked
+u16 wc_load512(u8 *a, u8 b) __sdcccall(0) __naked
 {
   a;  // to avoid SDCC warning
   b;  // to avoid SDCC warning
@@ -63,7 +63,7 @@ u16 wc_load512(u8 *a, u8 b) __naked
   __endasm;
 }
 
-void wc_exit(u8 rc)
+void wc_exit(u8 rc) __sdcccall(0)
 {
   rc;  // to avoid SDCC warning
   __asm

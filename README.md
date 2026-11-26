@@ -1,5 +1,12 @@
 # FT812 Viewer
 
+Форк [alex/ftview](https://git.alexkorochinskiy.ru/alex/ftview) (Alex
+Korochinskiy; версия без `.XM`/`.XMZ`, для работы рядом с XMPLAY) для Karabas
+Go / Mini G. Сюда по шагам переносится AVI-плеер из FTView
+[Wild Commander Improved v1.11i](https://github.com/andrewinsidelazarev/Wild-Commander-Improved)
+(Andrew Lazarev, MIT): покадровое воспроизведение, перемотка, полоса и время,
+звук на General Sound, список роликов.
+
 Плагин для Wild Commander (ZX Evolution / TS-Conf), показывающий изображения
 и видео через графический чип FT812 (EVE) платы.
 
@@ -48,22 +55,28 @@
 
 ## Установка
 
-Скопировать `ftview.wmf` в каталог плагинов Wild Commander. Плагин сам
+Скопировать `FTVIEW.WMF` в каталог плагинов Wild Commander. Плагин сам
 регистрируется на `.JPG`, `.PNG`, `.DLS`, `.DXP` и `.AVI`.
 
 ## Сборка
 
-Нужен [SDCC](http://sdcc.sourceforge.net/) версии 4.0.0 (зафиксирована в
-`build.bat`) и `hex2bin` — оба есть в тулчейне SDK ZX Evolution. Версия
-SDCC важна: собранные другой версией `lib/ft812`/`lib/tsconf`/`lib/sdk`
-дают несовместимый ABI (разная конвенция `sdcccall`) без явной ошибки
-сборки — плагин просто виснет или ведёт себя не так на реальном железе.
+Linux, SDCC 4.2 или новее из системы (`sdcc`, `sdasz80`), Python 3:
 
 ```
-build.bat
+make            # FTVIEW.WMF
+make venv       # .venv с intelhex, z80, Pillow — для тестов
+make test
 ```
 
-Результат — `ftview.wmf` в корне проекта.
+Библиотеки SDK (`vendor/`, из `pentevo/sdk/ft812sdk/lib` репозитория
+zx-evo) собраны старым SDCC и принимают аргументы через стек (ABI 0).
+C-код и стандартная библиотека нового SDCC — ABI 1, поэтому `tools/build.py`
+не включает `--sdcccall 0` глобально (ломаются `memcmp` и 32-битное умножение),
+а дописывает `__sdcccall(0)` к прототипам SDK в копиях заголовков
+(`build/abi`). `__naked`-функции `src/wc_api.c` помечены `__sdcccall(0)` явно.
+Сборка проверяет файлы `vendor/` по `vendor/manifest.json`, раскладку
+(код с `#8003` до `#A800`, данные до `#C000`), размер страницы (не больше 32
+блоков по 512 байт) и заголовок WMF.
 
 ## Статус
 

@@ -1,0 +1,37 @@
+# Build on every push / pull request; a tag v* publishes a release with FTVIEW.WMF.
+name: build
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools (SDCC 4.2.0 of Ubuntu 24.04, python venv)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q sdcc
+          python3 -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt
+      - name: Build
+        run: make -B
+      - name: The committed FTVIEW.WMF is the build of this commit
+        run: git diff --exit-code FTVIEW.WMF
+      - name: Test
+        run: make test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FTVIEW.WMF
+          path: FTVIEW.WMF
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" FTVIEW.WMF --title "FTVIEW.WMF ${GITHUB_REF_NAME#v}" --generate-notes
