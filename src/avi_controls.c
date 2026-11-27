@@ -276,28 +276,25 @@ u16 avi_seconds(u32 frame)
   return frame * (avi_period / 1000) / 1000;
 }
 
+// The HUD on the screen of the mode (scr_w x scr_h, avi_hud_init): the text
+// line, the dark band (Vertex2f, 1/16 px), the right time, the middle.
+u16 hud_ty, hud_yb, hud_ye, hud_xe, hud_xr, hud_xm;
 void avi_time(u16 x, u16 seconds)
 {
-  ft_Number(x, 730, 26, FT_OPT_RIGHTX, seconds / 60);
-  ft_Text(x, 730, 26, 0, ":");
-  ft_Number(x + 9, 730, 26, 2, seconds % 60);
+  ft_Number(x, hud_ty, 26, FT_OPT_RIGHTX, seconds / 60);
+  ft_Text(x, hud_ty, 26, 0, ":");
+  ft_Number(x + 9, hud_ty, 26, 2, seconds % 60);
 }
 
 // Постоянная часть HUD вычисляется один раз на файл: размер и масштаб
 // картинки, шаг полосы и полное время.
 u16 hud_bar, hud_total;
 u32 hud_unit;
-// Растяжение кадра на экран.
-typedef struct
-{
-  u16 w, h;           // размер на экране
-  u32 ta, te;         // BITMAP_TRANSFORM_A/E
-} HUD_VIEW;
-HUD_VIEW hud_v;
-#define hud_w hud_v.w
-#define hud_h hud_v.h
-#define hud_ta hud_v.ta
-#define hud_te hud_v.te
+// Растяжение кадра на экран (avi_view банка изображений).
+#define hud_w avi.view_w
+#define hud_h avi.view_h
+#define hud_ta avi.ta
+#define hud_te avi.te
 u8 hud_state;   // шаблон построен для hud_want(); 0 — не построен
 // Панель управления (полоса прокрутки, время, подсказки, звук) видна первые
 // 15 с и 15 с после нажатия любой клавиши, на паузе — всегда: застывший кадр
@@ -309,30 +306,14 @@ u8 hud_want()
 {
   return avi_paused + 1 | (avi_paused || hud_left ? 4 : 0);
 }
-// Кадр растягивается на экран с билинейной фильтрацией FT812: при нецелом
-// растяжении (2,39:1, маленькие ролики) ступеньки мягче. По руководству FT81x
-// такая точка рисуется за 1/4 такта вместо 1/16: кадр шириной до 1024 точек —
-// до 256 тактов на строку при бюджете не меньше 2048.
 void avi_hud_init()
 {
-  // Сначала выбираем ограничивающую сторону в 32 битах. Промежуточная
-  // высота узкого кадра могла переполнить u16; округлённая ширина 0 затем
-  // приводила к делению на ноль при расчёте матрицы. Минимум — один пиксель.
-  // Кадр вписывается во весь экран 1024×768, HUD рисуется поверх низа
-  // (кадр 4:3 512×384 — ровно вдвое на весь экран, 16:9 512×288 — 1024×576 по
-  // центру, HUD тогда на нижнем чёрном поле).
-  if ((u32)avi_height * 1024 > (u32)avi_width * 768)
-  {
-    hud_h = 768; hud_w = (u32)avi_width * 768 / avi_height;
-    if (!hud_w) hud_w = 1;
-  }
-  else
-  {
-    hud_w = 1024; hud_h = (u32)avi_height * 1024 / avi_width;
-    if (!hud_h) hud_h = 1;
-  }
-  hud_ta = (u32)avi_width * 256 / hud_w;
-  hud_te = (u32)avi_height * 256 / hud_h;
+  hud_ty = scr_h - 38;
+  hud_yb = (scr_h - 68) << 4;
+  hud_ye = (scr_h - 1) << 4;
+  hud_xe = (scr_w - 1) << 4;
+  hud_xr = scr_w - 44;
+  hud_xm = scr_w >> 1;
   hud_unit = avi_total / 1000 + 1;
   hud_bar = avi_total / hud_unit;
   hud_total = avi_seconds(avi_total);
@@ -359,7 +340,7 @@ void avi_hud_build()
   ft_BitmapTransformA(hud_ta);
   ft_BitmapTransformE(hud_te);
   ft_Begin(FT_BITMAPS);
-  ft_Vertex2ii((1024 - hud_w) / 2, (768 - hud_h) / 2, 0, 0);
+  ft_Vertex2ii((scr_w - hud_w) / 2, (scr_h - hud_h) / 2, 0, 0);
   if (hud_want() & 4)
   {
     // Виджеты/шрифт не должны наследовать матрицу масштабирования видео.
@@ -368,25 +349,25 @@ void avi_hud_build()
     // полосе: белый текст читается и на светлой картинке.
     ft_ColorRGB(0, 0, 0); ft_ColorA(160);
     ft_Begin(FT_RECTS);
-    ft_Vertex2f(0, 700 * 16); ft_Vertex2f(1023 * 16, 767 * 16);
+    ft_Vertex2f(0, hud_yb); ft_Vertex2f(hud_xe, hud_ye);
     ft_ColorA(255);
     ft_ColorRGB(255, 255, 255);
     hud_i_prog = ft_ccmdp + 3;
-    ft_Progress(24, 708, 976, 12, FT_OPT_FLAT, 0, hud_bar);
+    ft_Progress(24, hud_ty - 22, hud_xr - 4, 12, FT_OPT_FLAT, 0, hud_bar);
     hud_i_min = ft_ccmdp + 3;
-    ft_Number(80, 730, 26, FT_OPT_RIGHTX, 0);
-    ft_Text(80, 730, 26, 0, ":");
+    ft_Number(80, hud_ty, 26, FT_OPT_RIGHTX, 0);
+    ft_Text(80, hud_ty, 26, 0, ":");
     hud_i_sec = ft_ccmdp + 3;
-    ft_Number(89, 730, 26, 2, 0);
-    avi_time(980, hud_total);
+    ft_Number(89, hud_ty, 26, 2, 0);
+    avi_time(hud_xr, hud_total);
     // Куда идёт звук. PCM8 без GS — номер этапа, на котором не загрузился
     // его драйвер (gs_stage: 1 — карты нет, 2..5 — ответ ПЗУ или драйвера).
     if (avi_pcm_rate)
     {
-      ft_Text(988, 748, 26, FT_OPT_RIGHTX, pcm_gs ? "GS" : "FT812 GS");
-      if (!pcm_gs) ft_Number(992, 748, 26, 0, ft_state >> 2 & 7);
+      ft_Text(hud_xr + 8, hud_ty + 18, 26, FT_OPT_RIGHTX, pcm_gs ? "GS" : "FT812 GS");
+      if (!pcm_gs) ft_Number(hud_xr + 12, hud_ty + 18, 26, 0, ft_state >> 2 & 7);
     }
-    ft_Text(512, 730, 26, FT_OPT_CENTERX,
+    ft_Text(hud_xm, hud_ty, 26, FT_OPT_CENTERX,
             avi_paused ? "Paused: Space play | Left/Right seek | Esc exit" :
                          "Space pause | Left/Right seek | Home restart | Esc exit");
   }
@@ -500,7 +481,7 @@ bool avi_seek(u32 target)
   {
     index_asked = 1;
     ft_ccmd_start(cmdl); ft_Dlstart(); ft_Clear(1, 1, 1);
-    ft_Text(512, 384, 29, FT_OPT_CENTER, "Building seek index...");
+    ft_Text(scr_w >> 1, scr_h >> 1, 29, FT_OPT_CENTER, "Building seek index...");
     ft_Display(); ft_ccmd(FT_CCMD_SWAP);
     if (!fifo_flush() || !fifo_wait(0xFFC)) return false;
   }

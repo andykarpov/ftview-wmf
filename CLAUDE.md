@@ -58,11 +58,19 @@ the card, volume, extents, both speeds and the comparison of the whole file. Not
 - Banks (BANKS of build.py, 11 pages of 512-byte blocks: defs [0,32, 9,32, 10,32, 1,0]):
   image (page 0: src/main.c, images, the AVI header, seek table, message windows), video (page 9:
   src/main.c with FTVIEW_VIDEO_BANK, the player, hud_cmd from #BB80), io (page 10: io_bank.c +
-  sdr.c, the SD reader), buffer pages 1..8. Each bank: code #8006.., DATA #BD00..#BF80, the gates
+  sdr.c, the SD reader, the FT812 set-up), buffer pages 1..8. Each bank: code #8006.., DATA #BD00..#BF80, the gates
   at #BF80 (wc_video_bank, _far_gate: the same bytes in every bank, checked), the entry frame
-  #BFE0..#BFED (fixed `__at` addresses, checked). far_call(page, param) switches the bank by
+  #BFE0..#BFF1 (fixed `__at` addresses, checked). far_call(page, param) switches the bank by
   MNG8_PL (API 79, not #79: the SDK header has a typo) and back. The reader state (SDR_STATE,
   256 bytes) is at #FE00 of buffer page 1; IO_SHARED (the request) at #FFF0 of it.
+- The FT812 mode: option `-mode=N` of the plugin line of wc.ini (header +260, the parameter
+  structure of WC plugins; PRM_PL, API 83, returns the number of the option, 0 without options).
+  N is a mode of ft_modes of the SDK whose pixel clock the HDMI of the core takes (up to 64 MHz):
+  0 1 2 3 5 6 7 10 13 14, default 3 (800x600@60, 40 MHz). WC matches a value by prefix (10, 13, 14
+  listed before 1). The I/O bank sets the FT812 up (IO_FT_INIT: the SDK table does not fit in the
+  image bank) and returns the screen size; scr_w / scr_h are in the entry frame (#BFEE / #BFF0,
+  the frame is #BFE0..#BFF1); ft_state bit 5 = mode 10 (pixels twice as wide). The fit of the
+  video on the screen (avi_view) is done by the image bank with the probe (AVI_SHARED view_w ...).
 - The WC page pool is about 63 pages: the plugin takes 11 (62 on the bench with the others).
 - crt0 does not run GSINIT: initialised non-const globals are zeros (build.py fails on
   `_INITIALIZER`); make tables const.

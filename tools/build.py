@@ -173,13 +173,14 @@ def build(out, target, sources, header, data_loc=DATA_LOC, crt0=None):
 # the gate wc_video_bank (#BF80) switches to page 9 by API 79 (MNG8_PL),
 # far_call back for the rare operations. Each bank: code #8006..#BD00 (the
 # video bank #BB80: its HUD template hud_cmd is there), DATA #BD00..#BF80,
-# the gates from #BF80 and the entry frame #BFE0..#BFED equal in both.
+# the gates from #BF80 and the entry frame #BFE0..#BFF1 equal in both.
 BANKS = (('image', 0, ['src/main.c'], []),
          ('video', 9, ['src/main.c'], ['-DFTVIEW_VIDEO_BANK']),
          ('io', 10, ['src/io_bank.c', 'src/sdr.c'], []))
 FIXED = {'_fs_buf': 0xC000, '_ret_sp': 0xBFE0, '_ret_ix': 0xBFE2, '_ret_iy': 0xBFE4,
          '_filesize': 0xBFE6, '_file_ext': 0xBFEA, '_call_type': 0xBFEB,
-         '_gs_loaded': 0xBFEC, '_ft_state': 0xBFED, '_wc_video_bank': 0xBF80}
+         '_gs_loaded': 0xBFEC, '_ft_state': 0xBFED, '_scr_w': 0xBFEE, '_scr_h': 0xBFF0,
+         '_wc_video_bank': 0xBF80}
 SDR_STATE_ADDR = 0xFE00       # buffer page 1 tail (sdr.h)
 
 

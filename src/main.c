@@ -72,8 +72,13 @@ __at (0xBFEB) u8 call_type;
 __at (0xBFEC) u8 gs_loaded;
 // Для AVI VDAC2 инициализирует банк изображений: state_ft в битах 0..1,
 // биты 2..4 — этап отказа загрузки GS (gs_stage, 0 — драйвер работает),
+// бит 5 — пиксели режима вдвое шире своей высоты (режим 10),
 // бит 7 — видеосреда WC уже изменена и требует восстановления.
 __at (0xBFED) u8 ft_state;
+// The screen of the FT812 mode (vdac2_init of the image bank, the option
+// -mode of wc.ini): the visible size in pixels.
+__at (0xBFEE) u16 scr_w;
+__at (0xBFF0) u16 scr_h;
 void wc_video_bank();
 // far_entry of bank page with a parameter block in #C000; back to this bank
 // (the gate _far_gate of crt0 takes the page to return to in C).
@@ -318,54 +323,19 @@ const WC_TX_WINDOW err_size =
 #endif
 
 // --- FT812 --------------------------------
-// Инициализация того же режима 1024x768@59, что использовал исходный плагин.
-// Ожидания ID/CPURESET ограничены: неверный статус VDAC2 не должен навечно
-// оставлять WC внутри ft_init из старого SDK. Регистры развёртки не зависят
-// от пропорций открываемого изображения и после этого больше не меняются.
-// Для AVI её выполняет банк изображений до перехода (см. ft_state).
+// The FT812 is set up by the I/O bank (io_bank.c: the mode table of the SDK
+// does not fit here), in the mode of the option -mode of wc.ini (wc_h.c).
+// Buffer page 1 must be in #C000 (IO_FAR).
 #ifndef FTVIEW_VIDEO_BANK
 bool vdac2_init()
 {
-  u16 tries = 0xFFFF;
-  if ((ts_rreg(TS_STATUS) & 7) != 7) return false;
-  graphics_active = 1;
-  ft_cmd(FT_CMD_PWRDOWN);
-  ft_cmd(FT_CMD_ACTIVE);
-  ft_cmd(FT_CMD_SLEEP);
-  ft_cmd(FT_CMD_CLKEXT);
-  ft_cmdp(FT_CMD_CLKSEL, 8 | 0x40);
-  ft_cmd(FT_CMD_ACTIVE);
-  ft_cmd(FT_CMD_RST_PULSE);
-  while (ft_rreg8(FT_REG_ID) != FT_ID || ft_rreg16(FT_REG_CPURESET))
-    if (!--tries || *(volatile u8*)_ABT) return false;
-
-  ft_wreg8(FT_REG_PCLK, 0);
-  ft_wreg16(FT_REG_HCYCLE, 1344);
-  ft_wreg16(FT_REG_HOFFSET, 320);
-  ft_wreg16(FT_REG_HSYNC0, 24);
-  ft_wreg16(FT_REG_HSYNC1, 160);
-  ft_wreg16(FT_REG_VCYCLE, 806);
-  ft_wreg16(FT_REG_VOFFSET, 37);
-  ft_wreg16(FT_REG_VSYNC0, 2);
-  ft_wreg16(FT_REG_VSYNC1, 8);
-  ft_wreg16(FT_REG_HSIZE, 1024);
-  ft_wreg16(FT_REG_VSIZE, 768);
-  ft_wreg8(FT_REG_SWIZZLE, 0);
-  ft_wreg8(FT_REG_PCLK_POL, 0);
-  ft_wreg8(FT_REG_CSPREAD, 0);
-  ft_ccmd_start(cmdl);
-  ft_ClearColorRGB(0, 0, 0);
-  ft_Clear(1, 1, 1);
-  ft_Display();
-  ft_write_dl(cmdl, 3);
-  ft_wreg8(FT_REG_DLSWAP, FT_DLSWAP_FRAME);
-  ft_wreg8(FT_REG_ADAPTIVE_FRAMERATE, 0);
-  ft_wreg32(FT_REG_GPIOX_DIR, 0x8000UL);
-  ft_wreg32(FT_REG_GPIOX, 0x9200UL);
-  ft_wreg8(FT_REG_PCLK, 1);
-  // Плагин использует таймер WC, отдельные прерывания FT812 ему не нужны.
-  ft_wreg8(FT_REG_INT_EN, 0);
-  return true;
+  IO_FAR->op = IO_FT_INIT;
+  IO_FAR->n = wc_param(1);
+  far_call(IO_PAGE, IO_FAR);
+  if (IO_FAR->ok) graphics_active = 1;
+  scr_w = IO_FAR->offs;
+  scr_h = (u16)IO_FAR->fsec;
+  return IO_FAR->ok == 2;
 }
 
 #endif
@@ -540,8 +510,8 @@ void show_jpg_png(u8 is_jpg)
   }
   if (!fifo_wait(0xFFC)) return;
   ft_Begin(FT_BITMAPS);
-  ft_Vertex2ii((1024 - min(1024, image_x)) >> 1,
-              (768 - min(768, image_y)) >> 1, 0, 0);
+  ft_Vertex2ii((scr_w - min(scr_w, image_x)) >> 1,
+              (scr_h - min(scr_h, image_y)) >> 1, 0, 0);
   ft_Display();
   ft_ccmd(FT_CCMD_SWAP);
   if (fifo_flush()) fifo_wait(0xFFC);
@@ -566,8 +536,8 @@ void show_dxp()
   o = (u32)d->xs * ((u32)d->ys >> 2);
   if (o > 0x80000UL || (!d->type && sz != o * 2))
   { view_failed = 1; return; }
-  xo = (1024 - min(1024, d->xs)) >> 1;
-  yo = (768 - min(768, d->ys)) >> 1;
+  xo = (scr_w - min(scr_w, d->xs)) >> 1;
+  yo = (scr_h - min(scr_h, d->ys)) >> 1;
   wc_vmode(0x87);
 
   ft_ccmd_start(cmdl);
@@ -856,6 +826,7 @@ void main_dispatch()
     graphics_active = 0;
     ft_state = (vdac2_init() ? 1 : 2) | gs_stage << 2;
     if (graphics_active) ft_state |= 0x80;
+    if (scr_w == 640 && scr_h == 1024) ft_state |= 0x20;   // mode 10
     wc_video_bank();
   }
 #endif
