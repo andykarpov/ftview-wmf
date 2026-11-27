@@ -24,7 +24,7 @@ u8 avi_paused, avi_keys;
 // их считанные кадры. Опрос — раз в тик WC, в главном цикле и внутри долгих
 // ожиданий (декодирование, подкачка): нажатия копятся в avi_edges, пока их не
 // обработает главный цикл. Биты: Space, Left, Right, Home, PgDn, PgUp,
-// Enter (список роликов), любая клавиша (показывает панель управления).
+// (64 свободен: списка роликов нет), любая клавиша (показывает панель).
 u8 avi_edges, key_tick;
 void avi_keys_poll()
 {
@@ -37,7 +37,6 @@ void avi_keys_poll()
   if (wc_api__bool(_HOME)) keys |= 8;
   if (wc_api__bool(_PGD)) keys |= 16;
   if (wc_api__bool(_PGU)) keys |= 32;
-  if (wc_api__bool(_ENKE)) keys |= 64;
   if (wc_api__bool(_ANYK)) keys |= 128;
   avi_edges |= keys & ~avi_keys;
   avi_keys = keys;
@@ -122,9 +121,9 @@ bool avi_feed()
     wc_map_buffer(avi_cache_head);
     data = fs_buf + avi_cache_pos;
     // Звук FT812 идёт тем же SPI и временно меняет байты блока: только до DMA.
-    if (avi_pcm_rate && !pcm_gs && !pcm_tee(data, count, avi_pos)) return false;
+    if (avi_pcm_rate && pcm_gs != 1 && !pcm_tee(data, count, avi_pos)) return false;
     while (tail < padded) data[tail++] = 0;
-    if (avi_pcm_rate && pcm_gs)
+    if (avi_pcm_rate && pcm_gs == 1)
     {
       // GS: DMA блока в media FIFO идёт, пока процессор разбирает тот же
       // блок и отдаёт звук в GS. Ожидание GS прячется за передачей SPI;
@@ -364,7 +363,7 @@ void avi_hud_build()
     // его драйвер (gs_stage: 1 — карты нет, 2..5 — ответ ПЗУ или драйвера).
     if (avi_pcm_rate)
     {
-      ft_Text(hud_xr + 8, hud_ty + 20, 26, FT_OPT_RIGHTX, pcm_gs ? "GS" : "FT812 GS");
+      ft_Text(hud_xr + 8, hud_ty + 20, 26, FT_OPT_RIGHTX, pcm_gs == 2 ? "ESP" : pcm_gs ? "GS" : "FT812 GS");
       if (!pcm_gs) ft_Number(hud_xr + 12, hud_ty + 20, 26, 0, ft_state >> 2 & 7);
     }
     ft_Text(hud_xm, hud_ty, 26, FT_OPT_CENTERX,
@@ -428,7 +427,9 @@ u16 due_acc, due_q, due_r;
 // Ближе — ждём половину остатка по тактам Z80 (14 МГц, pcm_unit итераций
 // цикла по 26 тактов на сэмпл) и спрашиваем снова: прерывания и медленная
 // память лишь удлиняют ожидание, а половина остатка не даёт опоздать.
-u16 pcm_tick, pcm_unit;
+// pcm_tick, pcm_unit: avi.tick, avi.unit (avi_probe of the image bank).
+#define pcm_tick avi.tick
+#define pcm_unit avi.unit
 u8 poll_tick;
 
 void delay26(u16 n) __naked
@@ -510,15 +511,10 @@ void avi_first()
   if (!avi.io) wc_rewind();
 }
 
-// The list of the videos of the directory (Enter, the end of a video) is
-// not built here: the list bank of WC Improved reads the directory through
-// WildDOS internals. The player stays paused on the frame.
+// The list of the videos of the directory (Enter, the end of a video) of WC
+// Improved is not built here: its list bank reads the directory through
+// WildDOS internals. avi_switch (a video chosen there) stays 0.
 u8 avi_switch;
-bool avi_list(u32 address)
-{
-  address;
-  return avi_switch = 0;
-}
 
 // The codec by the start of the file in fs_buf (buffer page 1): the image
 // bank checks it, the video bank has no room.
@@ -550,15 +546,13 @@ bool avi_controls()
   avi_far(AVI_OP_PROBE);
   available = avi.ok == 1;
   if (avi.ok == 2) fail(7);
-  pcm_gs = gs_loaded && avi_pcm_rate && avi_pcm_rate <= GS_INT_HZ;
+  pcm_gs = avi.sink;
   if (!avi_rewind()) { fail(6); return true; }
   if (!available) { avi_pcm_rate = 0; return view_failed != 0; }
-  if (avi_pcm_rate && pcm_gs)
+  if (avi_pcm_rate && pcm_gs == 1)
   {
-    // Шаг фазового аккумулятора драйвера: rate/37500 в долях 1/65536.
-    u16 step = avi_pcm_rate == GS_INT_HZ ? 0xFFFF :
-               ((u32)avi_pcm_rate << 16) / GS_INT_HZ;
-    if (!gs_cmd(GS_RATE) || !gs_cmd(step) || !gs_cmd(step >> 8))
+    // Шаг фазового аккумулятора драйвера (avi.step, avi_probe).
+    if (!gs_cmd(GS_RATE) || !gs_cmd(avi.step) || !gs_cmd(avi.step >> 8))
     { fail(8); return true; }
   }
   wc_vmode(0x87);
@@ -566,8 +560,6 @@ bool avi_controls()
   hud_left = HUD_TICKS;
   key_tick = *(volatile u8*)_TMN;
   avi_hud_init();
-  pcm_tick = avi_pcm_rate / 40 + 1;
-  pcm_unit = avi_pcm_rate ? 14000000UL / 26 / avi_pcm_rate : 0;
   // Не 0xFFFFFFFF: due_frame + 1 переполнилось бы в кадр 0 и первый вызов
   // avi_due() пошёл бы по приращению без начального полного расчёта. То же
   // для счётчиков HUD.
@@ -635,23 +627,6 @@ bool avi_controls()
       }
       restart = true;
       elapsed = 0;
-    }
-    if (edge & 64)
-    {
-      // Enter — список роликов каталога: видео на паузе, окно поверх
-      // показанного кадра. Выбран ролик — выходим, show_avi запустит его.
-      // Esc — тот же ролик дальше: чтение каталога сдвинуло поток SD и
-      // заняло кэш EVO, поэтому поток заново с показанного кадра.
-      u8 was_paused = avi_paused;
-      if (!avi_paused && avi_pcm_rate)
-      { pause_sample = pcm_drop + pcm_played; pcm_stop(); }
-      avi_paused = 1;
-      if (avi_list(address)) break;
-      target = avi_frame ? avi_frame - 1 : 0;
-      if (avi_pcm_rate) pcm_drop = pause_sample;
-      restart = true;
-      avi_paused = was_paused;
-      hud_state = 0; elapsed = 0;
     }
     if (restart)
     {
@@ -724,16 +699,14 @@ bool avi_controls()
       if (avi_frame <= target) elapsed = 0;
     }
     // Конец ролика: звук доигран или данных больше нет (в заголовке сэмплов
-    // объявлено больше, чем в movi — иначе кадр застыл бы без паузы). Сразу
-    // список роликов каталога поверх последнего кадра: Enter запускает
-    // выбранный (show_avi), Esc оставляет кадр на паузе — Space начнёт
-    // просмотр сначала. Поток дальше не нужен, поэтому без перезапуска.
+    // объявлено больше, чем в movi — иначе кадр застыл бы без паузы). Кадр
+    // остаётся на паузе — Space начнёт просмотр сначала. Поток дальше не
+    // нужен, поэтому без перезапуска.
     if (avi_frame == avi_total && !avi_paused &&
         (!avi_pcm_rate ||
          (!pcm_live && (pcm_played == avi_pcm_total - pcm_drop || !avi_left))))
     {
       avi_paused = 1;
-      if (avi_list(address)) break;
       if (!avi_draw(address)) return true;
     }
   }

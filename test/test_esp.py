@@ -16,7 +16,8 @@ WMF = OUT / 'ESPTEST.WMF'
 MAP = OUT / 'esptest' / 'out.map'
 RET = 0x7000
 OP = dict(DETECT=0x41, START=0x42, STAGE=0x43, POLL=0x44, PAUSE=0x45, STOP=0x46, END=0x47)
-SHARED = struct.Struct('<BBBBHHBBHII20s')
+SHARED = struct.Struct('<BBBBHHBBHI')
+WFX = 0xFF60
 ST_IDLE, ST_READY, ST_BUSY, ST_M2S = 0, 1, 2, 3
 A_IDLE, A_WAIT, A_PLAY, A_DRAIN, A_ENDED = range(5)
 
@@ -34,10 +35,11 @@ class Esp:
     """The ESP on the SPI: WR_REGS / RD_REGS / WR_DATA / W_END and the player."""
 
     def __init__(self, present=True, audio=True, in_size=512 * 1024, busy_polls=2,
-                 late_push=(), late_polls=70000, lost_wend=(), drain_per_state=4096):
+                 late_push=(), late_polls=70000, lost_wend=(), drain_per_state=4096, played=None):
         self.present, self.audio, self.in_size = present, audio, in_size
         self.busy_polls, self.late_push, self.late_polls = busy_polls, set(late_push), late_polls
         self.lost_wend, self.drain = set(lost_wend), drain_per_state
+        self.fixed_played = played      # PLAYED (frames) the state reports, None: bytes drained
         self.regs = bytearray(64)
         self.cs = False
         self.out = bytearray()
@@ -108,7 +110,8 @@ class Esp:
 
     def put_state(self):
         struct.pack_into('<BBBBIIIII', self.regs, 0x10, self.state, self.fmt, 1, 1 if self.paused else 0,
-                         self.in_size - self.ring, 22050, self.played, 0, self.ring)
+                         self.in_size - self.ring, 22050,
+                         self.played if self.fixed_played is None else self.fixed_played, 0, self.ring)
 
     def command(self, c):
         self.cmds.append(c)
@@ -202,11 +205,12 @@ class Machine:
         base = self.sym['_t_ops']
         for i, o in enumerate(ops):
             blk = SHARED.pack(OP[o[0]], 0, o[1] if len(o) > 1 else 0, o[2] if len(o) > 2 else 0,
-                              o[3] if len(o) > 3 else 0, o[4] if len(o) > 4 else 0, 0, 0, 0, 0, 0,
-                              (o[5] if len(o) > 5 else b'').ljust(20, b'\0'))
+                              o[3] if len(o) > 3 else 0, o[4] if len(o) > 4 else 0, 0, 0, 0, 0)
             m.set_memory_block(base + i * SHARED.size, blk)
+            if len(o) > 5:
+                m.set_memory_block(WFX, o[5].ljust(20, b'\0'))
         m.set_memory_block(self.sym['_t_n'], bytes([len(ops)]))
-        assert len(ops) <= 24 and len(data) <= 0x1800, 'test too big'
+        assert len(ops) <= 40 and len(data) <= 0x1800, 'test too big'
         m.set_memory_block(self.sym['_t_data'], data)
         m.sp = 0x5D00
         m.set_memory_block(m.sp, RET.to_bytes(2, 'little'))
@@ -234,7 +238,7 @@ IMA_WFX = struct.pack('<HHIIHHHH', 0x11, 1, 43000, 21574, 1024, 4, 2, 2041)
 
 def stream_case(name, fmt, wfx, pieces, esp, polls=6, end=True):
     data = bytes((i * 7 + 3) & 0xFF for i in range(sum(pieces)))
-    ops = [('START', fmt, 0, 0, 0, wfx)]
+    ops = [('START', fmt, 0, 0, 0, wfx), ('PAUSE', 0, 0)]
     pos = 0
     for n in pieces:
         ops.append(('STAGE', 0, 0, pos, n))
@@ -252,6 +256,8 @@ def stream_case(name, fmt, wfx, pieces, esp, polls=6, end=True):
         hdr = b'RIFF\xF8\xFF\xFF\x7FWAVEfmt ' + bytes([18 + ext, 0, 0, 0]) + wfx[:16] + bytes([ext, 0]) + \
             wfx[18:18 + ext] + b'data\xD0\xFF\xFF\x7F'
     check(res[0][1] == 1, '%s: START refused' % name)
+    check(not esp.paused, '%s: still paused' % name)
+    check(esp.cmds[:2] == [0x90, 0x94] and esp.paused is not None, '%s: START not followed by PAUSE 1' % name)
     check(got == hdr + data, '%s: stream differs (%d of %d bytes)' % (name, len(got), len(hdr) + len(data)))
     check(res[-1][8] == 0, '%s: %d bytes left staged' % (name, res[-1][8]))
     if end:
@@ -281,6 +287,14 @@ def main():
                                ('STAGE', 0, 0, 0, 1024)], bytes(4096))
     check([r[1] for r in res] == [1, 1, 1, 0], 'full ring: STAGE results %s' % [r[1] for r in res])
     print('%-40s %s' % ('full ring refuses a STAGE', [r[1] for r in res]))
+    # PLAYED (frames) -> bytes of the stream: IMA blocks of 1024 bytes hold 2041 frames
+    for frames, want in ((0, 0), (2041, 1024), (2041 * 5 + 1000, 1024 * 5 + 1000 * 1024 // 2041)):
+        esp = Esp(played=frames)
+        res, _ = Machine(esp).run([('START', 1, 0, 0, 0, IMA_WFX), ('POLL',)])
+        check(res[1][9] == want, 'PLAYED %d frames -> %d bytes, not %d' % (frames, res[1][9], want))
+    res, _ = Machine(Esp(played=12345)).run([('START', 2, 0, 0, 0, struct.pack('<HHIIHHH', 1, 2, 22050, 88200, 4, 16, 0)), ('POLL',)])
+    check(res[1][9] == 12345 * 4, 'PCM 16 stereo: PLAYED 12345 -> %d bytes' % res[1][9])
+    print('%-40s %s' % ('PLAYED in bytes', 'ok' if not failures else 'FAIL'))
     print('test_esp: %d errors' % failures)
     sys.exit(1 if failures else 0)
 

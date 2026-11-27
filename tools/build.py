@@ -208,7 +208,7 @@ def gs_driver(gen, sdas, log):
             ',\n'.join(', '.join('0x%02X' % b for b in code[i:i + 16]) for i in range(0, len(code), 16))))
 
 
-def build_plugin(out, target):
+def build_plugin(out, target, extra=()):
     check_vendor()
     sdcc, sdas = tools()
     if out.exists():
@@ -235,7 +235,7 @@ def build_plugin(out, target):
         rels = []
         for src in sources:
             rel = '%s/%s.rel' % (bank, Path(src).stem)
-            run([sdcc] + common + inc + defines + ['-DSDR_STATE_ADDR=0x%04X' % SDR_STATE_ADDR,
+            run([sdcc] + common + inc + defines + list(extra) + ['-DSDR_STATE_ADDR=0x%04X' % SDR_STATE_ADDR,
                                                    '-c', str(ROOT / src), '-o', rel], out, log)
             rels.append(rel)
         link = [sdcc] + common + ['--code-loc', '0x8006', '--data-loc', '0xBD00', 'crt0.rel'] + rels \
@@ -303,10 +303,12 @@ if __name__ == '__main__':
     ap.add_argument('--crt0')
     ap.add_argument('--data-loc', type=lambda s: int(s, 0), default=DATA_LOC)
     ap.add_argument('--header', default=str(ROOT / 'src/wc_h.c'))
+    ap.add_argument('-D', dest='defines', action='append', default=[],
+                    help='a define for every bank of the plugin (NAME or NAME=VALUE)')
     ap.add_argument('sources', nargs='*')
     args = ap.parse_args()
     if not args.sources:
-        build_plugin(Path(args.build_dir), Path(args.output))
+        build_plugin(Path(args.build_dir).resolve(), Path(args.output), ['-D' + d for d in args.defines])
         sys.exit(0)
     build(Path(args.build_dir), Path(args.output), [Path(s).resolve() for s in args.sources],
           Path(args.header).resolve(), args.data_loc,

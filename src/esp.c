@@ -51,6 +51,8 @@ typedef struct
 ESP_STATE esp_st;
 u16 ring_head, ring_tail, ring_count;
 u8 esp_end_sent, esp_end_wanted;
+// PLAYED -> bytes: align bytes hold spb frames (from ESP_WFX at START).
+u16 esp_align, esp_spb;
 __at (ESP_RING) u8 esp_ring[ESP_RING_SIZE];
 
 static void wr_regs(u8 reg, const u8 *p, u8 n)
@@ -185,8 +187,9 @@ static void drain()
 // A WAV header for the stream: RIFF, fmt (the WAVEFORMATEX of the AVI with
 // its extra bytes) and a data chunk of unknown length (the stream ends with
 // AUDIO_END).
-static void wav_header(const u8 *wfx)
+static void wav_header()
 {
+  const u8 *wfx = ESP_WFX;
   u8 *h = esp_ring + ring_head;
   u8 extra = wfx[16];       // cbSize
   u8 fmt_len;
@@ -216,11 +219,19 @@ void esp_entry(ESP_SHARED *p)
     case ESP_START:
       ring_head = ring_tail = ring_count = 0;
       esp_end_sent = esp_end_wanted = 0;
+    {
+      const u16 *w = (const u16*)ESP_WFX;
+      esp_align = w[6] ? w[6] : 1;
+      esp_spb = w[0] == 0x11 && w[9] ? w[9] : 1;
       s = run_p(C_START, p->fmt);
       p->ok = s == ST_READY;
+      // Paused until the player has its first frame (PAUSE 0): PAUSE is a
+      // flag of the ESP in any state, START clears it.
+      if (p->ok) s = run_p(C_PAUSE, 1);
       rd_state();
-      if (p->ok && p->fmt == ESP_FMT_WAV) wav_header(p->wfx);
+      if (p->ok && p->fmt == ESP_FMT_WAV) wav_header();
       break;
+    }
     case ESP_STAGE:
     {
       u16 n = p->len, part;
@@ -256,6 +267,7 @@ void esp_entry(ESP_SHARED *p)
   p->err = s == ST_READY || !s ? 0 : s;
   p->state = esp_st.state;
   p->staged = ring_count;
-  p->played = esp_st.played;
-  p->rate = esp_st.rate;
+  // esp_spb is 0 before the first START (no GSINIT: globals start as 0).
+  p->played = esp_spb ? (esp_st.played / esp_spb) * esp_align +
+                        (esp_st.played % esp_spb) * esp_align / esp_spb : 0;
 }

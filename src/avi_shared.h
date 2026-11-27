@@ -27,6 +27,14 @@ typedef struct
   // the video bank has no room for it): size, BITMAP_TRANSFORM_A / E.
   u16 view_w, view_h;
   u32 ta, te;
+  // The sound (avi_probe): 0 FT812, 1 GS, 2 ESP; bytes of a block (the
+  // seek drops whole blocks for the ESP).
+  u8 sink;
+  u16 align;
+  // Made by avi_probe for the video bank (no room there for the divisions):
+  // the GS phase step rate/37500 in 1/65536, the sound of a WC tick with a
+  // margin (40 Hz), loops of delay26 (26 cycles at 14 MHz) a byte.
+  u16 step, tick, unit;
 } AVI_SHARED;
 
 #define AVI_OP_SEEK 1     // точка входа для target (нули — с начала файла);

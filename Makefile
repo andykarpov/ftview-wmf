@@ -10,6 +10,13 @@ all: $(BINARY)
 $(BINARY): $(SRC) tools/build.py
 	nice -n 19 python3 -I tools/build.py -o $@
 
+# build/noesp/FTVIEW.WMF: the sound never to the ESP32 (to check the GS path on a
+# bench that has an ESP); not released
+noesp: build/noesp/FTVIEW.WMF
+
+build/noesp/FTVIEW.WMF: $(SRC) tools/build.py
+	nice -n 19 python3 -I tools/build.py --build-dir build/noesp -D FTVIEW_NO_ESP -o $@
+
 # SDRTEST.WMF: board check of the SD reader (diag/sdrdiag.c), not released
 diag: build/SDRTEST.WMF
 
@@ -27,4 +34,4 @@ test: $(BINARY)
 clean:
 	rm -rf build
 
-.PHONY: all diag venv test clean
+.PHONY: all noesp diag venv test clean

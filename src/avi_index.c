@@ -703,10 +703,12 @@ u32 avi_position()
 // Обходим реальные границы LIST/чанков. Не ищем строки avih/strh внутри
 // данных изображения или JUNK. Глубина вложения ограничена рабочим стеком.
 // Разбор выполняется один раз на файл, поэтому живёт в банке изображений.
+// The audio strh: scale, rate, length, sample size (bytes of a unit).
+u32 a_scale, a_rate, a_len, a_ss;
 bool avi_probe()
 {
   u32 ends[4], pos, id, size, end;
-  u8 depth = 0, video = 0, sound = 0, stream = 0, kind = 0, pcm_ok = 0, gs;
+  u8 depth = 0, video = 0, sound = 0, stream = 0, kind = 0, pcm_ok = 0, esp_ok = 0;
   header_left = filesize; header_pos = header_size = 0;
   avi_period = avi_total = 0;
   avi_scale = avi_rate = 0;
@@ -767,38 +769,65 @@ bool avi_probe()
       if (id == 0x73647561UL) // auds
       {
         sound = 1; kind = 1;
-        if (stream != 2 || size < 36) return false;
+        if (stream != 2 || size < 48) return false;
         avi_word(); avi_word(); avi_word(); avi_word(); // handler/flags/priority/initial
-        if (avi_word() != 1) return false; // scale: один PCM8-сэмпл
-        id = avi_word();
-        if (!id || id > 48000) return false;
-        avi_pcm_rate = id;
+        a_scale = avi_word(); a_rate = avi_word();
         if (avi_word()) return false; // общая нулевая временная шкала
-        avi_pcm_total = avi_word();
+        a_len = avi_word();
+        avi_word(); avi_word();       // buffer size, quality
+        a_ss = avi_word();
       }
     }
     else if (id == 0x66727473UL && kind && size >= 16) // audio strf/WAVEFORMAT
     {
-      // Только PCM (1): беззнаковые 8 бит моно (araw), байт на сэмпл. Его
-      // выводит ЦАП GS, а без GS — звуковой блок FT812 (после перевода в
-      // знаковый). Другой звук остаётся у штатного CMD_PLAYVIDEO.
-      if (avi_word() == 0x00010001UL && avi_word() == avi_pcm_rate &&
-          avi_word() == avi_pcm_rate && avi_word() == 0x00080001UL)
-        pcm_ok = 1;
+      // WAVEFORMATEX (with cbSize and IMA's wSamplesPerBlock) into page 1
+      // for the WAV header of the ESP stream (esp.c). The ESP takes PCM 8 /
+      // 16, IMA ADPCM, A-law, u-law; GS and FT812 only PCM 8 bit mono
+      // (unsigned, a byte a sample). Other sound stays with CMD_PLAYVIDEO.
+      u8 k;
+      u16 *w = (u16*)ESP_WFX;
+      for (k = 0; k < 5; ++k) ((u32*)w)[k] = k < 4 || size >= 20 ? avi_word() : 0;
+      pcm_ok = w[0] == 1 && w[1] == 1 && w[7] == 8 && w[2] == a_rate && !w[3] && a_scale == 1;
+      esp_ok = (w[0] == 1 || w[0] == 0x11 || w[0] == 6 || w[0] == 7) && w[1] <= 2;
     }
     end += size & 1;
     if (end > ends[depth]) return false;
     while (avi_position() < end && !view_failed) header_byte();
   }
   avi_bytes = ((u32)avi_width * avi_height * 2 + 3) & 0xFFFFFFFCUL;
-  // Звук пойдёт на GS, если драйвер загружен, а частота не выше частоты его
-  // прерываний: шаг фазы должен уместиться в 16 бит (то же решает видеобанк).
-  gs = gs_loaded && avi_pcm_rate && avi_pcm_rate <= GS_INT_HZ;
+  // Where the sound goes (avi.sink): the ESP (ft_state bit 6: found at the
+  // start) for every format it takes; else PCM 8 mono to GS if the driver is
+  // loaded and the rate fits its interrupt (the phase step in 16 bits), else
+  // to the FT812. The player counts the sound in bytes of the stream (for
+  // PCM 8 a byte is a sample): rate = bytes a second from strh (the
+  // nAvgBytesPerSec of strf lies in some files), total = bytes.
+  avi.sink = avi.align = 0;
+  if (sound)
+  {
+    u16 align = ((u16*)ESP_WFX)[6];
+    id = a_scale ? a_rate * a_ss / a_scale : 0;
+#ifndef FTVIEW_NO_ESP
+    if ((ft_state & 0x40) && esp_ok && a_ss == align && id && id <= 0xFFFF)
+    { avi.sink = 2; avi.align = align; avi_pcm_rate = id; avi_pcm_total = a_len * a_ss; }
+    else
+#endif
+    if (pcm_ok && a_rate <= 48000)
+    {
+      avi.sink = gs_loaded && a_rate <= GS_INT_HZ;
+      avi.align = 1; avi_pcm_rate = a_rate; avi_pcm_total = a_len;
+    }
+  }
+  if (avi_pcm_rate)
+  {
+    avi.step = avi_pcm_rate == GS_INT_HZ ? 0xFFFF : ((u32)avi_pcm_rate << 16) / GS_INT_HZ;
+    avi.tick = avi_pcm_rate / 40 + 1;
+    avi.unit = 14000000UL / 26 / avi_pcm_rate;
+  }
   // Два RGB565-кадра, слово результата и 128 КиБ media FIFO не пересекаются.
-  // Кольцо FT812 лежит в RAM_G с #C0000; GS его не требует.
-  if (sound && (!pcm_ok || !avi_pcm_total || avi_scale != 1 ||
+  // Кольцо FT812 лежит в RAM_G с #C0000; GS и ESP его не требуют.
+  if (sound && (!avi.align || !avi_pcm_total || avi_scale != 1 ||
                 !avi_rate || avi_rate > 1000 ||
-                avi_bytes > (gs ? AVI_RESULT : PCM_BASE) / 2))
+                avi_bytes > (avi.sink ? AVI_RESULT : PCM_BASE) / 2))
   { avi_pcm_rate = 0; return false; }
   return !view_failed && video && avi_width && avi_height &&
          avi_total && avi_period >= 1000 && avi_period <= 10000000UL &&
@@ -819,38 +848,6 @@ u8 buf_codec()
   return 2;
 }
 
-// The frame on the screen, after the probe (the sizes of avih).
-// Кадр растягивается на экран с билинейной фильтрацией FT812: при нецелом
-// растяжении (2,39:1, маленькие ролики) ступеньки мягче. По руководству FT81x
-// такая точка рисуется за 1/4 такта вместо 1/16: кадр шириной до 1024 точек —
-// до 256 тактов на строку при бюджете не меньше 2048.
-void avi_view()
-{
-  // Сначала выбираем ограничивающую сторону в 32 битах. Промежуточная
-  // высота узкого кадра могла переполнить u16; округлённая ширина 0 затем
-  // приводила к делению на ноль при расчёте матрицы. Минимум — один пиксель.
-  // Кадр вписывается во весь экран scr_w×scr_h (режим FT812), HUD рисуется
-  // поверх низа (в 1024×768 кадр 4:3 512×384 — ровно вдвое на весь экран,
-  // 16:9 512×288 — 1024×576 по центру, HUD тогда на нижнем чёрном поле).
-  // Пиксели режима 10 (640×1024 на 1280×1024) вдвое шире: вписываем в
-  // 1280 и сжимаем ширину обратно.
-  u16 ew = scr_w;
-  if (ft_state & 0x20) ew <<= 1;
-  if ((u32)avi_height * ew > (u32)avi_width * scr_h)
-  {
-    avi.view_h = scr_h; avi.view_w = (u32)avi_width * scr_h / avi_height;
-  }
-  else
-  {
-    avi.view_w = ew; avi.view_h = (u32)avi_height * ew / avi_width;
-  }
-  if (ft_state & 0x20) avi.view_w >>= 1;
-  if (!avi.view_w) avi.view_w = 1;
-  if (!avi.view_h) avi.view_h = 1;
-  avi.ta = (u32)avi_width * 256 / avi.view_w;
-  avi.te = (u32)avi_height * 256 / avi.view_h;
-}
-
 void far_entry(AVI_SHARED *p)
 {
   view_failed = 0;
@@ -868,9 +865,10 @@ void far_entry(AVI_SHARED *p)
     index_state = 0;
     avi = *p;
     avi.ok = avi_probe();
-    if (avi.width && avi.height) avi_view();
     if (view_failed) avi.ok = 2;
     *p = avi;
+    // The frame on the screen: the I/O bank (avi_view), room there.
+    if (p->width && p->height) { IO_FAR->op = IO_VIEW; far_call(IO_PAGE, IO_FAR); }
   }
   p->disk = avi.disk;
 }

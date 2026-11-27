@@ -8,7 +8,7 @@ void esp_entry(ESP_SHARED *p);
 
 u8 t_n;
 // The data below the ESP ring (#A800..#BC00), the variables above it.
-ESP_SHARED t_ops[24];
+ESP_SHARED t_ops[40];
 __at (0x9000) u8 t_data[0x1800];
 
 void main()
