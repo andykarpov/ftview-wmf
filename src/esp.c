@@ -340,7 +340,7 @@ void esp_entry(ESP_SHARED *p)
   if ((u8)(TMN - d_win) >= 50)
   {
     // underruns of the ESP (low byte), its input buffer in KB, PUSHes a second
-    d_r[0] = esp_st.underruns; d_r[1] = esp_st.buffered >> 10; d_r[2] = d_pushes;
+    d_r[0] = esp_st.state; d_r[1] = esp_st.flags; d_r[2] = esp_st.buffered >> 10;
     d_push = d_all = d_pushes = 0;
     d_win = TMN;
   }
