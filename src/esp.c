@@ -39,11 +39,15 @@ __sfr __at 0x77 ESP_SPI_CTRL;
 #define M2S_WAITS 4
 #define WEND_TRIES 3
 #define PUSH_MAX 4096      // bytes of one PUSH (the ESP takes up to 16384)
-// A PUSH costs about 6 ms of waits for the ESP whatever its size (measured
-// on the board: 22 PUSHes a second of PCM 8 took 20 % of the time and the
-// video fell behind): the ring goes out only once this much is in it, or at
-// the end of the stream.
+// A PUSH has a fixed cost (about 2 ms of SPI frames and waits for the ESP,
+// measured on the board) besides its bytes: the ring goes out in batches,
+// once PUSH_MIN is in it or PUSH_AGE WC ticks after the last PUSH (by age,
+// not only by size: the audio of the stream is only about 0.3 s ahead of
+// the play, and a size alone left the ESP without data).
 #define PUSH_MIN 4096
+#define PUSH_AGE 3
+#define TMN_ (*(volatile u8*)0x6009)
+u8 push_tick;
 
 // The state block #10..#27: state, fmt, channels, flags, FREE, RATE, PLAYED,
 // TOTAL, BUFFERED.
@@ -126,6 +130,30 @@ static u8 run_p(u8 c, u8 param)
   return run(c);
 }
 
+// n bytes at p out of #57 by OTIR (a C loop took about 2.6 us a byte).
+static void spi_out(const u8 *p, u16 n) __naked
+{
+  p; n;
+  __asm
+    ld c, #0x57
+    ld a, e
+    or a
+    jr z, 00001$
+    ld b, a
+    otir
+00001$:
+    ld a, d
+    or a
+    ret z
+    ld b, #0
+00002$:
+    otir
+    dec d
+    jr nz, 00002$
+    ret
+  __endasm;
+}
+
 static void rd_state()
 {
   rd_regs(R_STATE, (u8*)&esp_st, sizeof(esp_st));
@@ -166,7 +194,7 @@ static bool push_(const u8 *p, u16 n)
   ESP_SPI_DATA = SPI_WR_DATA;
   (void)ESP_SPI_DATA;
   (void)ESP_SPI_DATA;
-  for (k = n; k; --k) ESP_SPI_DATA = *p++;
+  spi_out(p, n);
   // The DMA of the ESP takes words: zeros up to a multiple of 4.
   for (pad = -(u8)n & 3; pad; --pad) ESP_SPI_DATA = 0;
   ESP_SPI_CTRL = CS_OFF;
@@ -189,8 +217,10 @@ static bool push_(const u8 *p, u16 n)
 // AUDIO_END once wanted and the ring is empty.
 static void drain(bool force)
 {
+  if ((u8)(TMN_ - push_tick) >= PUSH_AGE) force = true;
   while (ring_count >= PUSH_MIN || ((force || esp_end_wanted) && ring_count))
   {
+    push_tick = TMN_;
     u16 n = ring_count;
     if (n > ESP_RING_SIZE - ring_tail) n = ESP_RING_SIZE - ring_tail;
     if (n > PUSH_MAX) n = PUSH_MAX;

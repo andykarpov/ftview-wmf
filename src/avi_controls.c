@@ -668,7 +668,7 @@ bool avi_controls()
     }
     if (avi_pcm_rate)
     {
-      if (pcm_gs && pcm_live)
+      if (pcm_gs == 1 && pcm_live)
       {
         u32 at = avi_due(), now = pcm_drop + pcm_played;
         if (now < at && at - now < pcm_tick)
