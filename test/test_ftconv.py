@@ -172,6 +172,30 @@ def main():
             run_case(tmp, "esp2", 640, 360, "24", ["--audio", "esp", "--stereo", "--rate", "44100"],
                      (512, 288), want_sink=["ESP32"])
             run_case(tmp, "mute", 400, 300, "24", [], (384, 288), audio=False)
+            # The output is never the input (X.AVI -> X.avi is one file on FAT / NTFS /
+            # APFS) and an existing output is kept without --force.
+            up = os.path.join(tmp, "UP.AVI")
+            shutil.copy(os.path.join(tmp, "wide.avi"), up)
+            quiet = open(os.devnull, "w")
+            old, sys.stdout = sys.stdout, quiet
+            olderr, sys.stderr = sys.stderr, quiet
+            try:
+                rc1 = ftconv.main(["--no-normalize", up])
+                rc2 = ftconv.main(["--no-normalize", up])
+                rc3 = ftconv.main(["--no-normalize", "-f", up])
+                rc4 = ftconv.main(["--no-normalize", "-o", up, up])
+            finally:
+                sys.stdout, sys.stderr = old, olderr
+                quiet.close()
+            check(rc1 == 0 and os.path.exists(os.path.join(tmp, "UP-ft.avi")), "same name: no UP-ft.avi")
+            check(rc2 == 2 and rc3 == 0, "existing output: rc %d / %d with -f" % (rc2, rc3))
+            check(rc4 == 2, "-o the input: rc %d" % rc4)
+            # Silent 29.97 fps: avi_probe wants an integer rate only with sound.
+            nt = os.path.join(tmp, "ntsc.avi")
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                            "testsrc2=size=320x240:rate=30000/1001:duration=2", "-c:v", "mjpeg", nt], check=True)
+            avi = ftconv.Avi(nt)
+            check(avi.verdict()[0] == "frame", "silent 29.97: %s" % avi.problems)
             # A long clip: step > 1 needs more than 5460 frames; 4 minutes of a tiny frame.
             src = os.path.join(tmp, "long.mp4")
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",

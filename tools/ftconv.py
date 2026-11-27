@@ -178,7 +178,8 @@ def audio_prepare(a):
 def loudness_gain(ffmpeg, path, a):
     """FTViewConvert: the peak to 0 dB; a record quieter than -12 LUFS after that
     goes up to 2 dB more (the limiter takes the peaks). None: silence / failed."""
-    r = run([ffmpeg, "-hide_banner", "-nostdin", "-nostats", "-i", path, "-map", "0:a:0", "-vn",
+    cut = (["-ss", "%.3f" % a.start] if a.start else []) + (["-t", "%.3f" % a.length] if a.length else [])
+    r = run([ffmpeg, "-hide_banner", "-nostdin", "-nostats"] + cut + ["-i", path, "-map", "0:a:0", "-vn",
              "-af", audio_prepare(a) + ",astats=measure_perchannel=none:measure_overall=Peak_level,"
              "ebur128=framelog=quiet", "-f", "null", "-"])
     if r.returncode:
@@ -194,8 +195,12 @@ def loudness_gain(ffmpeg, path, a):
 
 
 def ffmpeg_args(ffmpeg, src_path, out_path, size, a, gain, crop):
-    cmd = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-nostats", "-progress", "pipe:1",
-           "-i", src_path, "-map", "0:v:0"]
+    cmd = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-nostats", "-progress", "pipe:1"]
+    if a.start:
+        cmd += ["-ss", "%.3f" % a.start]
+    if a.length:
+        cmd += ["-t", "%.3f" % a.length]
+    cmd += ["-i", src_path, "-map", "0:v:0"]
     if a.audio != "none":
         cmd += ["-map", "0:a:0"]
     # Only the two streams, video first: avi_probe wants video as stream 1, sound as 2.
@@ -343,11 +348,13 @@ class Avi:
             p.append("no frame count in avih")
         if not 1000 <= self.period <= 10000000:
             p.append("frame period %d us" % self.period)
-        if self.scale != 1 or not 1 <= self.rate <= 1000:
+        sound = self.wfx is not None
+        # avi_probe wants an integer rate only with sound (the sound clock counts
+        # samples a frame); a silent clip is paced by the period of avih.
+        if sound and (self.scale != 1 or not 1 <= self.rate <= 1000):
             p.append("frame rate %d/%d is not an integer (use --fps)" % (self.rate, self.scale or 1))
         if bytes_ > AVI_RESULT // 2:
             p.append("frame %dx%d = %d points > 229375" % (self.width, self.height, px))
-        sound = self.wfx is not None
         self.sinks = {}
         if sound:
             tag, ch, rate, avg, align, bits = self.wfx
@@ -373,6 +380,8 @@ class Avi:
                 if bytes_ > PCM_BASE // 2:
                     self.notes.append("frame > 196608 points: the FT812 sound (no GS, no ESP32) "
                                       "goes to CMD_PLAYVIDEO")
+            if self.sinks and not self.a_len:
+                p.append("the sound stream has no length in strh")
             if not self.sinks:
                 why = "this sound" if not esp_ok else "%d bytes/s > 65535" % byte_rate
                 p.append("%s: neither GS / FT812 (PCM 8 bit mono) nor the ESP32 (%s)" % (self.audio_desc, why))
@@ -381,7 +390,11 @@ class Avi:
         if self.movi_start > 0x10000:
             self.notes.append("header longer than 64 KB: no seek")
         if self.riffs_more:
-            self.notes.append("OpenDML file (> 1 GB): idx1 covers only the first part")
+            # ffmpeg past 1 GB: avih and idx1 cover the first RIFF only (checked:
+            # 8347 of 9600 frames), so the player ends the film there.
+            p.append("OpenDML file over 1 GB: the player sees only the first %d frames "
+                     "(%.0f s); split it (--start / --length) or lower --bitrate"
+                     % (self.total, self.total * self.period / 1e6))
         return ("play" if p else "frame"), None
 
     def idx1(self):
@@ -518,8 +531,19 @@ def report(path, out=None):
 
 # --- main ---------------------------------------------------------------------
 
+def same_file(a, b):
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
 def convert(src_path, a, ffmpeg, ffprobe):
     s = probe(ffprobe, src_path)
+    if a.start:
+        s.duration = max(0.0, s.duration - a.start)
+    if a.length:
+        s.duration = min(s.duration, a.length) if s.duration else a.length
     has_audio = s.has_audio and a.audio != "none"
     shape = crop43(s) if a.crop43 else s
     size = output_size(shape, MAX_AREA)
@@ -529,14 +553,29 @@ def convert(src_path, a, ffmpeg, ffprobe):
         out = a.output
     else:
         out = os.path.splitext(src_path)[0] + ".avi"
-    if os.path.abspath(out) == os.path.abspath(src_path):
-        out = os.path.splitext(src_path)[0] + "-ft.avi"
+    # 3P.AVI -> 3P.avi is the same file on Windows, macOS and FAT.
+    if os.path.exists(out) and same_file(out, src_path) or \
+            os.path.normcase(os.path.abspath(out)).lower() == os.path.normcase(os.path.abspath(src_path)).lower():
+        if a.output and not os.path.isdir(a.output):
+            raise Fail("%s: the output is the input" % out)
+        out = os.path.splitext(out)[0] + "-ft.avi"
+    if os.path.exists(out) and not a.force:
+        raise Fail("%s exists (--force to overwrite)" % out)
     snd = "none"
     if has_audio:
         snd = "%s %d Hz %s" % ("PCM 8 bit" if a.audio == "gs" else "IMA ADPCM", a.rate,
                                "stereo" if a.stereo else "mono")
     print("%s: %dx%d %.3f:1 -> %s: %dx%d, %d fps, sound %s" % (
         src_path, s.width, s.height, s.aspect, out, size[0], size[1], a.fps, snd), flush=True)
+    audio_bps = 0
+    if has_audio:
+        audio_bps = a.rate if a.audio == "gs" else a.rate * (2 if a.stereo else 1) // 2
+    estimate = s.duration * (a.bitrate * 1000 / 8 * 1.1 + audio_bps)
+    if estimate > OPENDML_WARN:
+        part = OPENDML_WARN / (a.bitrate * 1000 / 8 * 1.1 + audio_bps)
+        raise Fail("%s: about %d MB: over 1 GB the player sees only the first part; convert it "
+                   "in parts of up to %d s (--start / --length) or lower --bitrate"
+                   % (src_path, estimate / 2 ** 20, max(1, int(part))))
     gain = None
     if has_audio and a.normalize:
         gain = loudness_gain(ffmpeg, src_path, a)
@@ -568,6 +607,9 @@ def main(argv=None):
     ap.add_argument("--stereo", action="store_true", help="stereo sound (esp only)")
     ap.add_argument("--fps", type=int, default=24, help="frame rate, an integer (default 24)")
     ap.add_argument("--bitrate", type=int, default=2000, help="video kbit/s (default 2000)")
+    ap.add_argument("--start", type=float, default=0, metavar="SEC", help="start at this second of the source")
+    ap.add_argument("--length", type=float, default=0, metavar="SEC", help="convert this many seconds")
+    ap.add_argument("-f", "--force", action="store_true", help="overwrite an existing output")
     ap.add_argument("--crop43", action="store_true", help="crop the sides of a wide frame to 4:3")
     ap.add_argument("--no-normalize", dest="normalize", action="store_false",
                     help="keep the sound level as it is")
@@ -608,11 +650,24 @@ def main(argv=None):
     return rc
 
 
+def own_console():
+    """Windows: the console was opened for this program alone (a file dropped on
+    the .exe, a double click), not a cmd / PowerShell window it runs in."""
+    if os.name != "nt" or not sys.stdin or not sys.stdin.isatty():
+        return False
+    try:
+        import ctypes
+        ids = (ctypes.c_uint * 4)()
+        # the PyInstaller boot loader and Python itself
+        return ctypes.windll.kernel32.GetConsoleProcessList(ids, 4) <= 2
+    except Exception:
+        return False
+
+
 if __name__ == "__main__":
     rc = main()
     # A Windows binary started by dropping a file on it: keep the window open.
-    if getattr(sys, "frozen", False) and os.name == "nt" and "--no-pause" not in sys.argv \
-            and not os.environ.get("PROMPT"):
+    if getattr(sys, "frozen", False) and "--no-pause" not in sys.argv and own_console():
         try:
             input("Press Enter to close")
         except EOFError:
