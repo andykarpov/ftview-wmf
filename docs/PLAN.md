@@ -42,3 +42,19 @@ No option in wc.ini: the plugin probes the ESP (`AUDIO_GET_STATE` answers READY)
    pause, seek by restart, end. Board: 3P.AVI (PCM 8), 3.avi (ADPCM), DT_intro.avi.
 3. MP3 in AVI.
 4. AAC in AVI (ADTS).
+
+## Checked on the PC (2026-11-27)
+
+- The engine (audio_core.c of karabas/esp32-radio, test/audio_host) decodes the stream
+  the plugin will send for 3.avi (the WAV header of esp.c + the `01wb` payloads, pieces up
+  to 4 KB): IMA ADPCM through dr_wav, length exact, 58.7 dB / max diff 93 against
+  ffmpeg (rounding of the IMA step). TOTAL of the state is garbage (the header has no
+  real length): the plugin does not use it.
+- audio_stream.cpp: PAUSE is a flag taken in any state (START clears it), so START,
+  PAUSE 1, prefill, PAUSE 0 at the first frame works. PLAYED = source frames rendered
+  (after the PCM ring of the decoder): the clock.
+- 3.avi itself cannot go frame by frame for other reasons: 640x360 RGB565 = 460800
+  bytes > 458750 per frame buffer, fps 24000/1001 not integer (video scale 1001).
+  A separate step after the sound: the RAM_G layout and a rate/scale time base.
+- Time base of the audio from strh: t(bytes) = bytes / dwSampleSize * dwScale / dwRate
+  (3.avi: 1024, 2041, 43000; 3P.AVI: 1, 1, 32000).
