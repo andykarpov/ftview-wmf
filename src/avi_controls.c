@@ -365,6 +365,12 @@ void avi_hud_build()
     {
       ft_Text(hud_xr + 8, hud_ty + 20, 26, FT_OPT_RIGHTX, pcm_gs == 2 ? "ESP" : pcm_gs ? "GS" : "FT812 GS");
       if (!pcm_gs) ft_Number(hud_xr + 12, hud_ty + 20, 26, 0, ft_state >> 2 & 7);
+#ifdef FTVIEW_ESP_DEBUG
+      // ESP underruns / its input buffer, KB / PUSHes a second
+      ft_Number(hud_xm - 60, hud_ty + 20, 26, 0, esp_dbg[0]);
+      ft_Number(hud_xm, hud_ty + 20, 26, 0, esp_dbg[1]);
+      ft_Number(hud_xm + 60, hud_ty + 20, 26, 0, esp_dbg[2]);
+#endif
     }
     ft_Text(hud_xm, hud_ty, 26, FT_OPT_CENTERX,
             avi_paused ? "Paused: Space play | Left/Right seek | Esc exit" :

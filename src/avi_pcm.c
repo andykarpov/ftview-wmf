@@ -21,6 +21,10 @@ u32 pcm_sample(u32 frame)
          (frame % fps) * (avi_pcm_rate % fps) / fps;
 }
 
+#ifdef FTVIEW_ESP_DEBUG
+u8 esp_dbg[3];
+extern u8 hud_state;
+#endif
 // An operation of the ESP client (I/O bank); ESP_FAR is in the page in #C000.
 u8 esp_op(u8 op)
 {
@@ -57,6 +61,10 @@ void pcm_poll()
     u8 st;
     esp_op(!avi_left || pcm_seen >= avi_pcm_total ? ESP_END : ESP_POLL);
     st = ESP_FAR->state;
+#ifdef FTVIEW_ESP_DEBUG
+    if (ESP_FAR->d_pushes != esp_dbg[2] || ESP_FAR->d_push != esp_dbg[0])
+    { esp_dbg[0] = ESP_FAR->d_push; esp_dbg[1] = ESP_FAR->d_other; esp_dbg[2] = ESP_FAR->d_pushes; hud_state = 0; }
+#endif
     if (st == ESP_A_ENDED) { pcm_live = 0; pcm_played = avi_pcm_total - pcm_drop; }
     else if (st == ESP_A_ERROR || st == ESP_A_IDLE) fail(10);
     else pcm_played = ESP_FAR->played;

@@ -39,6 +39,11 @@ __sfr __at 0x77 ESP_SPI_CTRL;
 #define M2S_WAITS 4
 #define WEND_TRIES 3
 #define PUSH_MAX 4096      // bytes of one PUSH (the ESP takes up to 16384)
+// A PUSH costs about 6 ms of waits for the ESP whatever its size (measured
+// on the board: 22 PUSHes a second of PCM 8 took 20 % of the time and the
+// video fell behind): the ring goes out only once this much is in it, or at
+// the end of the stream.
+#define PUSH_MIN 4096
 
 // The state block #10..#27: state, fmt, channels, flags, FREE, RATE, PLAYED,
 // TOTAL, BUFFERED.
@@ -46,6 +51,7 @@ typedef struct
 {
   u8 state, fmt, channels, flags;
   u32 free, rate, played, total, buffered;
+  u16 underruns;
 } ESP_STATE;
 
 ESP_STATE esp_st;
@@ -54,6 +60,10 @@ u8 esp_end_sent, esp_end_wanted;
 // PLAYED -> bytes: align bytes hold spb frames (from ESP_WFX at START).
 u16 esp_align, esp_spb;
 __at (ESP_RING) u8 esp_ring[ESP_RING_SIZE];
+#ifdef FTVIEW_ESP_DEBUG
+#define TMN (*(volatile u8*)0x6009)
+u8 d_win, d_push, d_all, d_pushes, d_r[3];
+#endif
 
 static void wr_regs(u8 reg, const u8 *p, u8 n)
 {
@@ -122,7 +132,21 @@ static void rd_state()
 }
 
 // AUDIO_PUSH of n bytes at p. false: refused or lost (the caller keeps them).
+static bool push_(const u8 *p, u16 n);
 static bool push(const u8 *p, u16 n)
+{
+#ifdef FTVIEW_ESP_DEBUG
+  u8 t0 = TMN;
+  bool r = push_(p, n);
+  d_push += (u8)(TMN - t0);
+  ++d_pushes;
+  return r;
+#else
+  return push_(p, n);
+#endif
+}
+
+static bool push_(const u8 *p, u16 n)
 {
   u8 s, tries, pad;
   u16 k;
@@ -163,9 +187,9 @@ static bool push(const u8 *p, u16 n)
 
 // The ring to the ESP while its FREE allows, at most PUSH_MAX a PUSH; then
 // AUDIO_END once wanted and the ring is empty.
-static void drain()
+static void drain(bool force)
 {
-  while (ring_count)
+  while (ring_count >= PUSH_MIN || ((force || esp_end_wanted) && ring_count))
   {
     u16 n = ring_count;
     if (n > ESP_RING_SIZE - ring_tail) n = ESP_RING_SIZE - ring_tail;
@@ -208,6 +232,9 @@ static void wav_header()
 void esp_entry(ESP_SHARED *p)
 {
   u8 s = 0;
+#ifdef FTVIEW_ESP_DEBUG
+  u8 t0 = TMN;
+#endif
   p->ok = 1;
   switch (p->op)
   {
@@ -236,7 +263,13 @@ void esp_entry(ESP_SHARED *p)
     {
       u16 n = p->len, part;
       const u8 *src = (const u8*)p->ptr;
-      if (n > ESP_RING_SIZE - ring_count) { p->ok = 0; break; }
+      // No room: what the ring holds goes out now, below PUSH_MIN too (the
+      // caller stages before the DMA of the block: the SPI is free).
+      if (n > ESP_RING_SIZE - ring_count)
+      {
+        if (run(C_STATE) == ST_READY) { rd_state(); drain(true); }
+        if (n > ESP_RING_SIZE - ring_count) { p->ok = 0; break; }
+      }
       ring_count += n;
       while (n)
       {
@@ -254,7 +287,7 @@ void esp_entry(ESP_SHARED *p)
       // fall through
     case ESP_POLL:
       s = run(C_STATE);
-      if (s == ST_READY) { rd_state(); drain(); }
+      if (s == ST_READY) { rd_state(); drain(false); }
       break;
     case ESP_PAUSE:
       s = run_p(C_PAUSE, p->param);
@@ -267,6 +300,17 @@ void esp_entry(ESP_SHARED *p)
   p->err = s == ST_READY || !s ? 0 : s;
   p->state = esp_st.state;
   p->staged = ring_count;
+#ifdef FTVIEW_ESP_DEBUG
+  d_all += (u8)(TMN - t0);
+  if ((u8)(TMN - d_win) >= 50)
+  {
+    // underruns of the ESP (low byte), its input buffer in KB, PUSHes a second
+    d_r[0] = esp_st.underruns; d_r[1] = esp_st.buffered >> 10; d_r[2] = d_pushes;
+    d_push = d_all = d_pushes = 0;
+    d_win = TMN;
+  }
+  p->d_push = d_r[0]; p->d_other = d_r[1]; p->d_pushes = d_r[2];
+#endif
   // esp_spb is 0 before the first START (no GSINIT: globals start as 0).
   p->played = esp_spb ? (esp_st.played / esp_spb) * esp_align +
                         (esp_st.played % esp_spb) * esp_align / esp_spb : 0;

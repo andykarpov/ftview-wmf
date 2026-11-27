@@ -795,27 +795,29 @@ bool avi_probe()
     while (avi_position() < end && !view_failed) header_byte();
   }
   avi_bytes = ((u32)avi_width * avi_height * 2 + 3) & 0xFFFFFFFCUL;
-  // Where the sound goes (avi.sink): the ESP (ft_state bit 6: found at the
-  // start) for every format it takes; else PCM 8 mono to GS if the driver is
-  // loaded and the rate fits its interrupt (the phase step in 16 bits), else
-  // to the FT812. The player counts the sound in bytes of the stream (for
-  // PCM 8 a byte is a sample): rate = bytes a second from strh (the
-  // nAvgBytesPerSec of strf lies in some files), total = bytes.
+  // Where the sound goes (avi.sink): PCM 8 mono to GS if the driver is
+  // loaded and the rate fits its interrupt (the phase step in 16 bits): GS
+  // takes the bytes during the DMA of the block. Else the ESP (ft_state bit
+  // 6: found at the start) for every format it takes: its PUSHes cost the
+  // Z80 a few ms each before the DMA (PCM 8 of 32 kHz through the ESP played
+  // at 80 % speed on the board, IMA ADPCM at full speed). Else PCM 8 to the
+  // FT812. The player counts the sound in bytes of the stream (for PCM 8 a
+  // byte is a sample): rate = bytes a second from strh (the nAvgBytesPerSec
+  // of strf lies in some files), total = bytes.
   avi.sink = avi.align = 0;
   if (sound)
   {
     u16 align = ((u16*)ESP_WFX)[6];
     id = a_scale ? a_rate * a_ss / a_scale : 0;
-#ifndef FTVIEW_NO_ESP
-    if ((ft_state & 0x40) && esp_ok && a_ss == align && id && id <= 0xFFFF)
-    { avi.sink = 2; avi.align = align; avi_pcm_rate = id; avi_pcm_total = a_len * a_ss; }
-    else
-#endif
     if (pcm_ok && a_rate <= 48000)
     {
-      avi.sink = gs_loaded && a_rate <= GS_INT_HZ;
       avi.align = 1; avi_pcm_rate = a_rate; avi_pcm_total = a_len;
+      avi.sink = gs_loaded && a_rate <= GS_INT_HZ;
     }
+#ifndef FTVIEW_NO_ESP
+    if (!avi.sink && (ft_state & 0x40) && esp_ok && a_ss == align && id && id <= 0xFFFF)
+    { avi.sink = 2; avi.align = align; avi_pcm_rate = id; avi_pcm_total = a_len * a_ss; }
+#endif
   }
   if (avi_pcm_rate)
   {

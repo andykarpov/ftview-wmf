@@ -34,4 +34,10 @@ test: $(BINARY)
 clean:
 	rm -rf build
 
-.PHONY: all noesp diag venv test clean
+# build/espdbg/FTVIEW.WMF: the HUD shows the time in the ESP calls; not released
+espdbg: build/espdbg/FTVIEW.WMF
+
+build/espdbg/FTVIEW.WMF: $(SRC) tools/build.py
+	nice -n 19 python3 -I tools/build.py --build-dir build/espdbg -D FTVIEW_ESP_DEBUG -o $@
+
+.PHONY: all noesp espdbg diag venv test clean

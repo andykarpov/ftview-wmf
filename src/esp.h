@@ -45,6 +45,11 @@ typedef struct
   u32 played;        // bytes of the stream played since START (PLAYED in
                      // blocks of the WAVEFORMATEX: nBlockAlign bytes a
                      // wSamplesPerBlock frames)
+#ifdef FTVIEW_ESP_DEBUG
+  // the last full second (50 WC ticks): ESP underruns, its input buffer in
+  // KB, PUSHes
+  u8 d_push, d_other, d_pushes;
+#endif
 } ESP_SHARED;
 
 // #FFC0..#FFD3 of the page in #C000: free in every buffer page (page 1:
