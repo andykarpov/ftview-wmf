@@ -14,6 +14,7 @@
 #include "sdr.h"
 #include "io_bank.h"
 #include "avi_shared.h"
+#include "esp.h"
 
 typedef struct
 {
@@ -73,6 +74,7 @@ __at (0xBFEC) u8 gs_loaded;
 // Для AVI VDAC2 инициализирует банк изображений: state_ft в битах 0..1,
 // биты 2..4 — этап отказа загрузки GS (gs_stage, 0 — драйвер работает),
 // бит 5 — пиксели режима вдвое шире своей высоты (режим 10),
+// бит 6 — есть ESP32 с плеером звука (звук AVI идёт туда),
 // бит 7 — видеосреда WC уже изменена и требует восстановления.
 __at (0xBFED) u8 ft_state;
 // The screen of the FT812 mode (vdac2_init of the image bank, the option
@@ -237,6 +239,8 @@ void view_cleanup()
 #ifdef FTVIEW_VIDEO_BANK
   // Драйвер GS отдаёт управление ПЗУ: иначе другие программы не получат
   // штатных команд GS. Выполняется и тогда, когда VDAC2 не найден.
+  // The ESP buffers up to 512 KB of the stream: stop it on every exit.
+  if (ft_state & 0x40) { ESP_FAR->op = ESP_STOP; far_call(IO_PAGE, ESP_FAR); }
   if (gs_loaded)
   {
     (void)gs_data;  // непрочитанный ответ драйвера не должен задержать выход
@@ -827,6 +831,12 @@ void main_dispatch()
     ft_state = (vdac2_init() ? 1 : 2) | gs_stage << 2;
     if (graphics_active) ft_state |= 0x80;
     if (scr_w == 640 && scr_h == 1024) ft_state |= 0x20;   // mode 10
+#ifndef FTVIEW_NO_ESP
+    // The audio player of the ESP32 (ZiFi32) takes the sound first (avi_probe).
+    ESP_FAR->op = ESP_DETECT;
+    far_call(IO_PAGE, ESP_FAR);
+    if (ESP_FAR->ok) ft_state |= 0x40;
+#endif
     wc_video_bank();
   }
 #endif

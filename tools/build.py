@@ -176,7 +176,7 @@ def build(out, target, sources, header, data_loc=DATA_LOC, crt0=None):
 # the gates from #BF80 and the entry frame #BFE0..#BFF1 equal in both.
 BANKS = (('image', 0, ['src/main.c'], []),
          ('video', 9, ['src/main.c'], ['-DFTVIEW_VIDEO_BANK']),
-         ('io', 10, ['src/io_bank.c', 'src/sdr.c'], []))
+         ('io', 10, ['src/io_bank.c', 'src/sdr.c', 'src/esp.c'], ['-DFTVIEW_IO_BANK']))
 FIXED = {'_fs_buf': 0xC000, '_ret_sp': 0xBFE0, '_ret_ix': 0xBFE2, '_ret_iy': 0xBFE4,
          '_filesize': 0xBFE6, '_file_ext': 0xBFEA, '_call_type': 0xBFEB,
          '_gs_loaded': 0xBFEC, '_ft_state': 0xBFED, '_scr_w': 0xBFEE, '_scr_h': 0xBFF0,
@@ -208,7 +208,7 @@ def gs_driver(gen, sdas, log):
             ',\n'.join(', '.join('0x%02X' % b for b in code[i:i + 16]) for i in range(0, len(code), 16))))
 
 
-def build_plugin(out, target):
+def build_plugin(out, target, extra=()):
     check_vendor()
     sdcc, sdas = tools()
     if out.exists():
@@ -235,7 +235,7 @@ def build_plugin(out, target):
         rels = []
         for src in sources:
             rel = '%s/%s.rel' % (bank, Path(src).stem)
-            run([sdcc] + common + inc + defines + ['-DSDR_STATE_ADDR=0x%04X' % SDR_STATE_ADDR,
+            run([sdcc] + common + inc + defines + list(extra) + ['-DSDR_STATE_ADDR=0x%04X' % SDR_STATE_ADDR,
                                                    '-c', str(ROOT / src), '-o', rel], out, log)
             rels.append(rel)
         link = [sdcc] + common + ['--code-loc', '0x8006', '--data-loc', '0xBD00', 'crt0.rel'] + rels \
@@ -252,7 +252,8 @@ def build_plugin(out, target):
         for name, addr in fixed.items():
             if sym.get(name) != addr:
                 fail('%s: %s at %s, not #%04X' % (bank, name, sym.get(name), addr))
-        limit = 0xBB80 if page == 9 else 0xBD00
+        # the video bank: hud_cmd from #BB80; the I/O bank: the ESP ring from #A800
+        limit = {9: 0xBB80, 10: 0xA800}.get(page, 0xBD00)
         for name, (start, size) in a.items():
             if not size:
                 continue
@@ -302,10 +303,12 @@ if __name__ == '__main__':
     ap.add_argument('--crt0')
     ap.add_argument('--data-loc', type=lambda s: int(s, 0), default=DATA_LOC)
     ap.add_argument('--header', default=str(ROOT / 'src/wc_h.c'))
+    ap.add_argument('-D', dest='defines', action='append', default=[],
+                    help='a define for every bank of the plugin (NAME or NAME=VALUE)')
     ap.add_argument('sources', nargs='*')
     args = ap.parse_args()
     if not args.sources:
-        build_plugin(Path(args.build_dir), Path(args.output))
+        build_plugin(Path(args.build_dir).resolve(), Path(args.output), ['-D' + d for d in args.defines])
         sys.exit(0)
     build(Path(args.build_dir), Path(args.output), [Path(s).resolve() for s in args.sources],
           Path(args.header).resolve(), args.data_loc,

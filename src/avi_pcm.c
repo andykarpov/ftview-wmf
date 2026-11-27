@@ -1,6 +1,9 @@
 // PCM извлекается при подаче AVI в media FIFO, без второго чтения SD.
-// Вывод: драйвер General Sound (кольцо 32 КиБ в памяти GS, pcm_gs=1) или,
-// без GS, звуковой блок FT812 (кольцо #C0000..#CFFFF, отдельно от кадров).
+// Вывод (pcm_gs = avi.sink): 2 — плеер звука ESP32 (esp.c в банке
+// ввода-вывода: кольцо 5 КиБ там, буфер 512 КиБ в ESP; любой формат WAV),
+// 1 — драйвер General Sound (кольцо 32 КиБ в памяти GS), 0 — звуковой блок
+// FT812 (кольцо #C0000..#CFFFF, отдельно от кадров). Звук считается в байтах
+// потока (у PCM8 байт — сэмпл): у ESP её PLAYED пересчитывает esp.c.
 #define PCM_CAPACITY 32768UL
 // avi_pcm_rate, avi_pcm_total, avi_movi_* и точка перемотки avi_seek_* —
 // поля структуры avi (avi_controls.c).
@@ -18,9 +21,29 @@ u32 pcm_sample(u32 frame)
          (frame % fps) * (avi_pcm_rate % fps) / fps;
 }
 
+#ifdef FTVIEW_ESP_DEBUG
+u8 esp_dbg[3];
+extern u8 hud_state;
+#endif
+// An operation of the ESP client (I/O bank); ESP_FAR is in the page in #C000.
+u8 esp_op(u8 op)
+{
+  ESP_FAR->op = op;
+  far_call(IO_PAGE, ESP_FAR);
+  if (ESP_FAR->err) fail(18);
+  return ESP_FAR->ok;
+}
+
+void esp_pause(u8 on)
+{
+  ESP_FAR->param = on;
+  esp_op(ESP_PAUSE);
+}
+
 void pcm_stop()
 {
-  if (pcm_gs) { if (!gs_cmd(GS_PAUSE)) fail(9); }
+  if (pcm_gs == 2) esp_pause(1);
+  else if (pcm_gs) { if (!gs_cmd(GS_PAUSE)) fail(9); }
   else ft_pb_stop();
   pcm_live = 0;
 }
@@ -31,6 +54,22 @@ void pcm_stop()
 // звук, поэтому там опустошение останавливает воспроизведение как сбой.
 void pcm_poll()
 {
+  // ESP: also before the start (paused): the poll pushes the staged bytes.
+  // AUDIO_END once the audio is all staged; ENDED is the end of the sound.
+  if (pcm_gs == 2)
+  {
+    u8 st;
+    esp_op(!avi_left || pcm_seen >= avi_pcm_total ? ESP_END : ESP_POLL);
+    st = ESP_FAR->state;
+#ifdef FTVIEW_ESP_DEBUG
+    if (ESP_FAR->d_pushes != esp_dbg[2] || ESP_FAR->d_push != esp_dbg[0])
+    { esp_dbg[0] = ESP_FAR->d_push; esp_dbg[1] = ESP_FAR->d_other; esp_dbg[2] = ESP_FAR->d_pushes; hud_state = 0; }
+#endif
+    if (st == ESP_A_ENDED) { pcm_live = 0; pcm_played = avi_pcm_total - pcm_drop; }
+    else if (st == ESP_A_ERROR || st == ESP_A_IDLE) fail(10);
+    else pcm_played = ESP_FAR->played;
+    return;
+  }
   if (pcm_live)
   {
     if (pcm_gs)
@@ -65,7 +104,17 @@ void pcm_poll()
 void pcm_reset()
 {
   pcm_stop();
-  if (pcm_gs) { if (!gs_cmd(GS_FLUSH)) fail(12); }
+  if (pcm_gs == 2)
+  {
+    // A new stream from a whole block (ADPCM keeps its state in the block
+    // header): the drop to the seek target ends at a block start. Page 1:
+    // ESP_WFX for the WAV header.
+    pcm_drop -= pcm_drop % avi.align;
+    wc_map_buffer(1);
+    ESP_FAR->fmt = ESP_FMT_WAV;
+    if (!esp_op(ESP_START)) fail(19);
+  }
+  else if (pcm_gs) { if (!gs_cmd(GS_FLUSH)) fail(12); }
   // PLAY=1 принимается звуковым блоком асинхронно. Курсор некоторое время
   // ещё указывает в старый буфер. Выбираем непересекающуюся половину 64 КиБ:
   // переход курсора в неё однозначно подтверждает принятие нового старта.
@@ -82,7 +131,8 @@ void pcm_start()
   if (!pcm_written || pcm_drop >= avi_pcm_total) return;
   if (pcm_gs)
   {
-    if (!gs_cmd(GS_PLAY)) { fail(13); return; }
+    if (pcm_gs == 2) esp_pause(0);
+    else if (!gs_cmd(GS_PLAY)) { fail(13); return; }
     pcm_live = 1;
     return;
   }
@@ -117,6 +167,19 @@ bool pcm_write(u8 *data, u16 size)
   if (!pcm_gs || pcm_written + size - pcm_played >= PCM_CAPACITY) pcm_poll();
   if (view_failed || pcm_written + size - pcm_played >= PCM_CAPACITY)
   { fail(15); return false; }
+  if (pcm_gs == 2)
+  {
+    // Into the ring of the I/O bank (no SPI: the tee runs before the DMA of
+    // the block); a full ring is pushed to the ESP once, then tried again.
+    u8 k;
+    for (k = 2; k; --k)
+    {
+      ESP_FAR->ptr = (u16)data; ESP_FAR->len = size;
+      if (esp_op(ESP_STAGE)) { pcm_written += size; return true; }
+      pcm_poll();
+    }
+    fail(15); return false;
+  }
   if (pcm_gs)
   {
     // GS принимает беззнаковые сэмплы AVI как есть.

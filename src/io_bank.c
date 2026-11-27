@@ -9,6 +9,8 @@
 #include <wc_api.h>
 #include "sdr.h"
 #include "io_bank.h"
+#include "esp.h"
+#include "avi_shared.h"
 
 __at (0xBFE0) u16 ret_sp;
 __at (0xBFE2) u16 ret_ix;
@@ -31,6 +33,10 @@ void main() __naked
 void main_dispatch()
 {
 }
+
+// The screen of the mode set up here (ft_init_mode), for avi_view.
+u16 io_w, io_h;
+u8 io_half;
 
 // The mode of the FT812: option n of -mode of wc.ini (0: no options) ->
 // ft_modes of the SDK; 3 (800x600@60, 40 MHz) by default. 1024x768@59 of the
@@ -77,8 +83,9 @@ static void ft_init_mode(IO_SHARED *p)
     ft_wreg16(FT_REG_VSYNC0, m->v_fporch - 1);
     ft_wreg16(FT_REG_VSYNC1, m->v_fporch + m->v_sync - 1);
   }
-  p->offs = m->h_visible;
-  p->fsec = m->v_visible;
+  p->offs = io_w = m->h_visible;
+  p->fsec = io_h = m->v_visible;
+  io_half = io_w == 640 && io_h == 1024;   // mode 10: pixels twice as wide
   ft_wreg16(FT_REG_HSIZE, m->h_visible);
   ft_wreg16(FT_REG_VSIZE, m->v_visible);
   // The system clock of the mode (8 MHz x f_mul): the chip times the audio,
@@ -103,10 +110,44 @@ static void ft_init_mode(IO_SHARED *p)
   p->ok = 2;
 }
 
+// The frame on the screen, after the probe (the sizes of avih).
+// Кадр растягивается на экран с билинейной фильтрацией FT812: при нецелом
+// растяжении (2,39:1, маленькие ролики) ступеньки мягче. По руководству FT81x
+// такая точка рисуется за 1/4 такта вместо 1/16: кадр шириной до 1024 точек —
+// до 256 тактов на строку при бюджете не меньше 2048.
+static void avi_view(AVI_SHARED *a)
+{
+  // Сначала выбираем ограничивающую сторону в 32 битах. Промежуточная
+  // высота узкого кадра могла переполнить u16; округлённая ширина 0 затем
+  // приводила к делению на ноль при расчёте матрицы. Минимум — один пиксель.
+  // Кадр вписывается во весь экран io_w×io_h (режим FT812), HUD рисуется
+  // поверх низа (в 1024×768 кадр 4:3 512×384 — ровно вдвое на весь экран,
+  // 16:9 512×288 — 1024×576 по центру, HUD тогда на нижнем чёрном поле).
+  // Пиксели режима 10 (640×1024 на 1280×1024) вдвое шире: вписываем в
+  // 1280 и сжимаем ширину обратно.
+  u16 ew = io_w;
+  if (io_half) ew <<= 1;
+  if ((u32)a->height * ew > (u32)a->width * io_h)
+  {
+    a->view_h = io_h; a->view_w = (u32)a->width * io_h / a->height;
+  }
+  else
+  {
+    a->view_w = ew; a->view_h = (u32)a->height * ew / a->width;
+  }
+  if (io_half) a->view_w >>= 1;
+  if (!a->view_w) a->view_w = 1;
+  if (!a->view_h) a->view_h = 1;
+  a->ta = (u32)a->width * 256 / a->view_w;
+  a->te = (u32)a->height * 256 / a->view_h;
+}
+
 void far_entry(IO_SHARED *p)
 {
   if (p->op == IO_OPEN) p->ok = sdr_open((u8*)0xC000, p->size) == SDR_OK;
   else if (p->op == IO_READ) p->ok = sdr_read(p->fsec, p->n, p->page, p->offs);
   else if (p->op == IO_FT_INIT) ft_init_mode(p);
+  else if (p->op == IO_VIEW) avi_view(AVI_FAR);
+  else if (p->op >= ESP_DETECT) esp_entry((ESP_SHARED*)p);
   else p->ok = 0;
 }
