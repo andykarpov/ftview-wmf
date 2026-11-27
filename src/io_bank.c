@@ -4,8 +4,8 @@
 #include <defs.h>
 #include <ft812.h>
 #include <ft812lib.h>
-#include <ts.h>
 #include <tslib.h>
+#include "tsconf.h"
 #include <wc_api.h>
 #include "sdr.h"
 #include "io_bank.h"
@@ -48,6 +48,10 @@ static void ft_init_mode(IO_SHARED *p)
   u8 opt = p->n;
   const FT_MODE *m = &ft_modes[mode_of_option[opt <= 10 ? opt : 0]];
   p->ok = 0;
+  // As the original plugin (main.c): TS_STATUS of tsconf.h is the port #00AF
+  // read as an __sfr, so ts_rreg reads the register numbered by that byte.
+  // The status itself has no 7 in bits 2..0 on the Karabas ("No VDAC2");
+  // this check passes there, keep it as it was.
   if ((ts_rreg(TS_STATUS) & 7) != 7) return;
   p->ok = 1;               // the video of WC is changed from here on
   ft_cmd(FT_CMD_PWRDOWN);
