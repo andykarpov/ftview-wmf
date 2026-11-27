@@ -308,8 +308,8 @@ u8 hud_want()
 }
 void avi_hud_init()
 {
-  hud_ty = scr_h - 38;
-  hud_yb = (scr_h - 68) << 4;
+  hud_ty = scr_h - 44;     // the text line; the sound label 20 px under it, clear of the edge
+  hud_yb = (scr_h - 74) << 4;
   hud_ye = (scr_h - 1) << 4;
   hud_xe = (scr_w - 1) << 4;
   hud_xr = scr_w - 44;
@@ -364,8 +364,8 @@ void avi_hud_build()
     // его драйвер (gs_stage: 1 — карты нет, 2..5 — ответ ПЗУ или драйвера).
     if (avi_pcm_rate)
     {
-      ft_Text(hud_xr + 8, hud_ty + 18, 26, FT_OPT_RIGHTX, pcm_gs ? "GS" : "FT812 GS");
-      if (!pcm_gs) ft_Number(hud_xr + 12, hud_ty + 18, 26, 0, ft_state >> 2 & 7);
+      ft_Text(hud_xr + 8, hud_ty + 20, 26, FT_OPT_RIGHTX, pcm_gs ? "GS" : "FT812 GS");
+      if (!pcm_gs) ft_Number(hud_xr + 12, hud_ty + 20, 26, 0, ft_state >> 2 & 7);
     }
     ft_Text(hud_xm, hud_ty, 26, FT_OPT_CENTERX,
             avi_paused ? "Paused: Space play | Left/Right seek | Esc exit" :
