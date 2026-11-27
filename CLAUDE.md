@@ -97,6 +97,19 @@ the card, volume, extents, both speeds and the comparison of the whole file. Not
 - unreal-ng (emu-shot) runs the plugin on WC rc6 (images, keys) but its FT812 crashes on every
   AVI (the old FTVIEW too): AVI only on the board.
 
+## Converter (tools/ftconv.py)
+
+- Video -> AVI for the player: Python 3.8+ stdlib, runs ffmpeg / ffprobe (--ffmpeg, $FTCONV_FFMPEG,
+  the folder of the program, PATH; never bundled: GPL). The VDAC2 recipe of FTViewConvert (MIT,
+  in the WCI repo `FTViewConvert/Program.cs`: frame size OutputSizeVdac2, quantisation matrix,
+  loudness, SeekIndex) ported; added --audio esp (IMA ADPCM) and --check (Avi.verdict mirrors
+  avi_probe / index_build: keep it in step with src/avi_index.c).
+- The FTVIEWI1 table is embedded only for PCM 8 / no sound: for the ESP sink pcm_rate / pcm_total
+  are bytes and that table was never checked against the player, so ESP files seek by idx1.
+- test/test_ftconv.py (seconds, needs ffmpeg, skips without): lavfi clips, sizes, the verdict, the
+  table against the definition of an entry. CI job `ftconv`: PyInstaller one-file builds (Linux,
+  Windows, macOS arm64), smoke test, uploaded to the release of a tag.
+
 ## Rules
 
 - Commit messages, code comments and CLAUDE.md in English; README.md in Russian (it came so).
