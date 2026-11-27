@@ -21,7 +21,7 @@
 
 // Operations (ESP_SHARED.op), all in the I/O bank.
 #define ESP_DETECT 0x41   // ok: an ESP with the player answers
-#define ESP_START 0x42    // a new stream of fmt, paused; for WAV the header from ESP_WFX
+#define ESP_START 0x42    // a new stream, paused, the format (fmt, out) from ESP_WFX; WAV gets a header
 #define ESP_STAGE 0x43    // len bytes at ptr (window #C000) into the ring; ok 0: no room
 #define ESP_POLL 0x44     // push what the ring holds while the ESP has room, then the state
 #define ESP_PAUSE 0x45    // param 1 pause / 0 go on
@@ -30,8 +30,8 @@
 
 // The staging ring of the I/O bank: what the video bank took out of a block
 // waits here until the ESP has room (FREE).
-#define ESP_RING 0xA800
-#define ESP_RING_SIZE 0x1400
+#define ESP_RING 0xAC00
+#define ESP_RING_SIZE 0x1000   // a piece of a block is at most 4 KB
 
 typedef struct
 {
@@ -58,6 +58,10 @@ typedef struct
 #define ESP_FAR ((ESP_SHARED*)0xFFC0)
 // The WAVEFORMATEX of the AVI (20 bytes), written by avi_probe into page 1.
 #define ESP_WFX ((u8*)0xFF60)
+// The audio strh (scale, rate, length, sample size) and the flags of avi_probe
+// (bit 0 sound, 1 PCM 8 mono, 2 a format of the ESP, 3 GS driver, 4 ESP).
+#define AUD_STRH ((u32*)0xFF74)
+#define AUD_FLAGS ((u8*)0xFF84)
 
 #ifdef FTVIEW_IO_BANK
 void esp_entry(ESP_SHARED *p);

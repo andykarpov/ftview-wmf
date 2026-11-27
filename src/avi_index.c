@@ -703,8 +703,12 @@ u32 avi_position()
 // Обходим реальные границы LIST/чанков. Не ищем строки avih/strh внутри
 // данных изображения или JUNK. Глубина вложения ограничена рабочим стеком.
 // Разбор выполняется один раз на файл, поэтому живёт в банке изображений.
-// The audio strh: scale, rate, length, sample size (bytes of a unit).
-u32 a_scale, a_rate, a_len, a_ss;
+// The audio strh into page 1 (AUD_STRH: scale, rate, length, sample size)
+// for avi_sound of the I/O bank.
+#define a_scale AUD_STRH[0]
+#define a_rate AUD_STRH[1]
+#define a_len AUD_STRH[2]
+#define a_ss AUD_STRH[3]
 bool avi_probe()
 {
   u32 ends[4], pos, id, size, end;
@@ -788,49 +792,16 @@ bool avi_probe()
       u16 *w = (u16*)ESP_WFX;
       for (k = 0; k < 5; ++k) ((u32*)w)[k] = k < 4 || size >= 20 ? avi_word() : 0;
       pcm_ok = w[0] == 1 && w[1] == 1 && w[7] == 8 && w[2] == a_rate && !w[3] && a_scale == 1;
-      esp_ok = (w[0] == 1 || w[0] == 0x11 || w[0] == 6 || w[0] == 7) && w[1] <= 2;
+      esp_ok = (w[0] == 1 || w[0] == 0x11 || w[0] == 6 || w[0] == 7 || w[0] == 0x55) && w[1] <= 2;
     }
     end += size & 1;
     if (end > ends[depth]) return false;
     while (avi_position() < end && !view_failed) header_byte();
   }
   avi_bytes = ((u32)avi_width * avi_height * 2 + 3) & 0xFFFFFFFCUL;
-  // Where the sound goes (avi.sink): PCM 8 mono to GS if the driver is
-  // loaded and the rate fits its interrupt (the phase step in 16 bits): GS
-  // takes the bytes during the DMA of the block. Else the ESP (ft_state bit
-  // 6: found at the start) for every format it takes: its PUSHes cost the
-  // Z80 a few ms each before the DMA (PCM 8 of 32 kHz through the ESP played
-  // at 80 % speed on the board, IMA ADPCM at full speed). Else PCM 8 to the
-  // FT812. The player counts the sound in bytes of the stream (for PCM 8 a
-  // byte is a sample): rate = bytes a second from strh (the nAvgBytesPerSec
-  // of strf lies in some files), total = bytes.
-  avi.sink = avi.align = 0;
-  if (sound)
-  {
-    u16 align = ((u16*)ESP_WFX)[6];
-    id = a_scale ? a_rate * a_ss / a_scale : 0;
-    if (pcm_ok && a_rate <= 48000)
-    {
-      avi.align = 1; avi_pcm_rate = a_rate; avi_pcm_total = a_len;
-      avi.sink = gs_loaded && a_rate <= GS_INT_HZ;
-    }
-#ifndef FTVIEW_NO_ESP
-    if (!avi.sink && (ft_state & 0x40) && esp_ok && a_ss == align && id && id <= 0xFFFF)
-    { avi.sink = 2; avi.align = align; avi_pcm_rate = id; avi_pcm_total = a_len * a_ss; }
-#endif
-  }
-  if (avi_pcm_rate)
-  {
-    avi.step = avi_pcm_rate == GS_INT_HZ ? 0xFFFF : ((u32)avi_pcm_rate << 16) / GS_INT_HZ;
-    avi.tick = avi_pcm_rate / 40 + 1;
-    avi.unit = 14000000UL / 26 / avi_pcm_rate;
-  }
-  // Два RGB565-кадра, слово результата и 128 КиБ media FIFO не пересекаются.
-  // Кольцо FT812 лежит в RAM_G с #C0000; GS и ESP его не требуют.
-  if (sound && (!avi.align || !avi_pcm_total || avi_scale != 1 ||
-                !avi_rate || avi_rate > 1000 ||
-                avi_bytes > (avi.sink ? AVI_RESULT : PCM_BASE) / 2))
-  { avi_pcm_rate = 0; return false; }
+  // The sound (sink, rate, total ...) is chosen by avi_sound of the I/O
+  // bank (no room here): the flags of the format for it.
+  *AUD_FLAGS = sound | pcm_ok << 1 | esp_ok << 2 | gs_loaded << 3 | (ft_state & 0x40) >> 2;
   return !view_failed && video && avi_width && avi_height &&
          avi_total && avi_period >= 1000 && avi_period <= 10000000UL &&
          avi_bytes <= AVI_RESULT / 2;
@@ -870,7 +841,9 @@ void far_entry(AVI_SHARED *p)
     if (view_failed) avi.ok = 2;
     *p = avi;
     // The frame on the screen: the I/O bank (avi_view), room there.
-    if (p->width && p->height) { IO_FAR->op = IO_VIEW; far_call(IO_PAGE, IO_FAR); }
+    // The sound and the frame on the screen: the I/O bank (avi_sound,
+    // avi_view), no room here.
+    if (avi.ok == 1) { IO_FAR->op = IO_AVI; far_call(IO_PAGE, IO_FAR); }
   }
   p->disk = avi.disk;
 }

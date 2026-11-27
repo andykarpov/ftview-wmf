@@ -234,6 +234,8 @@ def build():
 
 
 IMA_WFX = struct.pack('<HHIIHHHH', 0x11, 1, 43000, 21574, 1024, 4, 2, 2041)
+# MPEGLAYER3WAVEFORMAT of ffmpeg: 32 kHz mono, 128 kbit/s
+MP3_WFX = struct.pack('<HHIIHHHH', 0x55, 1, 32000, 16000, 1152, 0, 12, 1)
 
 
 def stream_case(name, fmt, wfx, pieces, esp, polls=6, end=True):
@@ -251,7 +253,7 @@ def stream_case(name, fmt, wfx, pieces, esp, polls=6, end=True):
     res, ticks = m.run(ops, data)
     got = bytes(esp.streams[-1]) if esp.streams else b''
     hdr = b''
-    if fmt == 1:
+    if wfx[:2] != b'\x55\x00':
         ext = min(wfx[16], 2)
         hdr = b'RIFF\xF8\xFF\xFF\x7FWAVEfmt ' + bytes([18 + ext, 0, 0, 0]) + wfx[:16] + bytes([ext, 0]) + \
             wfx[18:18 + ext] + b'data\xD0\xFF\xFF\x7F'
@@ -277,13 +279,13 @@ def main():
     stream_case('WAV IMA ADPCM, 1 KB pieces', 1, IMA_WFX, [1024] * 4, Esp())
     stream_case('WAV PCM (cbSize 0), odd pieces', 1, struct.pack('<HHIIHHH', 1, 1, 22050, 22050, 1, 8, 0) + b'\0\0',
                 [1, 3, 517, 1023, 2], Esp())
-    stream_case('MP3, a piece over the ring end', 2, b'', [2600, 1, 2500, 777], Esp())
-    stream_case('small FREE: partial pushes', 2, b'', [2000, 2000, 2000], Esp(in_size=1500, drain_per_state=1000), polls=8)
-    stream_case('late M2S of the 2nd PUSH', 2, b'', [1000, 1000, 1000], Esp(late_push=(1,), late_polls=300))
-    stream_case('lost W_END of the 1st PUSH', 2, b'', [1000, 1000], Esp(lost_wend=(0,)))
+    stream_case('MP3, a piece over the ring end', 2, MP3_WFX, [2600, 1, 2500, 777], Esp())
+    stream_case('small FREE: partial pushes', 2, MP3_WFX, [1000] * 6, Esp(in_size=1500, drain_per_state=1000), polls=8)
+    stream_case('late M2S of the 2nd PUSH', 2, MP3_WFX, [1000, 1000, 1000], Esp(late_push=(1,), late_polls=300))
+    stream_case('lost W_END of the 1st PUSH', 2, MP3_WFX, [1000, 1000], Esp(lost_wend=(0,)))
     # a full ring refuses a STAGE
     esp = Esp(in_size=16)
-    res, _ = Machine(esp).run([('START', 2), ('STAGE', 0, 0, 0, 4096), ('STAGE', 0, 0, 0, 1024),
+    res, _ = Machine(esp).run([('START', 2, 0, 0, 0, MP3_WFX), ('STAGE', 0, 0, 0, 3072), ('STAGE', 0, 0, 0, 1024),
                                ('STAGE', 0, 0, 0, 1024)], bytes(4096))
     check([r[1] for r in res] == [1, 1, 1, 0], 'full ring: STAGE results %s' % [r[1] for r in res])
     print('%-40s %s' % ('full ring refuses a STAGE', [r[1] for r in res]))
@@ -294,6 +296,8 @@ def main():
         check(res[1][9] == want, 'PLAYED %d frames -> %d bytes, not %d' % (frames, res[1][9], want))
     res, _ = Machine(Esp(played=12345)).run([('START', 2, 0, 0, 0, struct.pack('<HHIIHHH', 1, 2, 22050, 88200, 4, 16, 0)), ('POLL',)])
     check(res[1][9] == 12345 * 4, 'PCM 16 stereo: PLAYED 12345 -> %d bytes' % res[1][9])
+    res, _ = Machine(Esp(played=64000 + 1152)).run([('START', 2, 0, 0, 0, MP3_WFX), ('POLL',)])
+    check(res[1][9] == 32000 + 576, 'MP3 128k 32 kHz: PLAYED 65152 -> %d bytes' % res[1][9])
     print('%-40s %s' % ('PLAYED in bytes', 'ok' if not failures else 'FAIL'))
     print('test_esp: %d errors' % failures)
     sys.exit(1 if failures else 0)

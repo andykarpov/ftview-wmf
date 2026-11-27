@@ -277,9 +277,14 @@ void esp_entry(ESP_SHARED *p)
       ring_head = ring_tail = ring_count = 0;
       esp_end_sent = esp_end_wanted = 0;
     {
+      // The format from the WAVEFORMATEX: MP3 (0x55) as it is, the rest of
+      // the WAV family behind a WAV header. PLAYED -> bytes: a block of
+      // nBlockAlign bytes holds wSamplesPerBlock frames (IMA ADPCM) or one;
+      // MP3 (constant bitrate): nAvgBytesPerSec bytes a nSamplesPerSec frames.
       const u16 *w = (const u16*)ESP_WFX;
-      esp_align = w[6] ? w[6] : 1;
-      esp_spb = w[0] == 0x11 && w[9] ? w[9] : 1;
+      p->fmt = w[0] == 0x55 ? ESP_FMT_MP3 : ESP_FMT_WAV;
+      esp_align = w[0] == 0x55 ? w[4] : w[6] ? w[6] : 1;
+      esp_spb = w[0] == 0x55 ? w[2] : w[0] == 0x11 && w[9] ? w[9] : 1;
       s = run_p(C_START, p->fmt);
       p->ok = s == ST_READY;
       // Paused until the player has its first frame (PAUSE 0): PAUSE is a

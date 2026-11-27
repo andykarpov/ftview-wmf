@@ -7,7 +7,8 @@
 #define IO_OPEN 1         // sdr_open(fs_buf, size): the file WC started the plugin with
 #define IO_READ 2         // sdr_read(fsec, n, page, offs)
 #define IO_FT_INIT 3      // the FT812 in the mode of option n of -mode: ok, offs = width, fsec = height
-#define IO_VIEW 4         // the frame of AVI_FAR (#FF00) fitted on the screen of the mode (view_w ...)
+#define IO_AVI 4          // AVI_FAR (#FF00) after avi_probe: the sound (avi_sound) and the frame
+                          // on the screen of the mode (avi_view)
 
 typedef struct
 {

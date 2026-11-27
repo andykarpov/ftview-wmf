@@ -142,12 +142,73 @@ static void avi_view(AVI_SHARED *a)
   a->te = (u32)a->height * 256 / a->view_h;
 }
 
+// The sound of the AVI of AVI_FAR (avi_probe of the image bank left the
+// strh in AUD_STRH, the strf in ESP_WFX and the flags in AUD_FLAGS): sink,
+// align, rate, total of a->...; a->ok 0 (CMD_PLAYVIDEO) when no sink takes it.
+#define GS_INT_HZ 37500UL
+static void avi_sound(AVI_SHARED *a)
+{
+  u8 f = *AUD_FLAGS;
+  u32 a_scale = AUD_STRH[0], a_rate = AUD_STRH[1], a_len = AUD_STRH[2], a_ss = AUD_STRH[3];
+  // Where the sound goes (avi.sink): PCM 8 mono to GS if the driver is
+  // loaded and the rate fits its interrupt (the phase step in 16 bits): GS
+  // takes the bytes during the DMA of the block. Else the ESP (ft_state bit
+  // 6: found at the start) for every format it takes: its PUSHes cost the
+  // Z80 a few ms each before the DMA (PCM 8 of 32 kHz through the ESP played
+  // at 80 % speed on the board, IMA ADPCM at full speed). Else PCM 8 to the
+  // FT812. The player counts the sound in bytes of the stream (for PCM 8 a
+  // byte is a sample): rate = bytes a second from strh (the nAvgBytesPerSec
+  // of strf lies in some files), total = bytes.
+  a->sink = a->align = 0;
+  a->pcm_rate = 0;
+  if (f & 1)
+  {
+    u16 align = ((u16*)ESP_WFX)[6];
+    u32 id = a_scale ? a_rate * a_ss / a_scale : 0;
+    if ((f & 2) && a_rate <= 48000)
+    {
+      a->align = 1; a->pcm_rate = a_rate; a->pcm_total = a_len;
+      a->sink = (f & 8) && a_rate <= GS_INT_HZ;
+    }
+#ifndef FTVIEW_NO_ESP
+    // MP3: a frame a chunk (sample size 0); taken as constant bitrate: the
+    // bytes a second of strf, the total from the length of strh in time, the
+    // seek from any byte (the decoder finds the next frame).
+    if (((u16*)ESP_WFX)[0] == 0x55 && a_rate)
+    {
+      a_ss = a_len * a_scale;                  // the length in 1 / a_rate s
+      id = ((u32*)ESP_WFX)[2];                 // nAvgBytesPerSec
+      a_len = (a_ss / a_rate) * id + (a_ss % a_rate) * id / a_rate;
+      a_ss = align = 1;
+    }
+    if (!a->sink && (f & 0x10) && (f & 4) && a_ss == align && id && id <= 0xFFFF)
+    { a->sink = 2; a->align = align; a->pcm_rate = id; a->pcm_total = a_len * a_ss; }
+#endif
+  }
+  if (a->pcm_rate)
+  {
+    a->step = a->pcm_rate == GS_INT_HZ ? 0xFFFF : ((u32)a->pcm_rate << 16) / GS_INT_HZ;
+    a->tick = a->pcm_rate / 40 + 1;
+    a->unit = 14000000UL / 26 / a->pcm_rate;
+  }
+  // Два RGB565-кадра, слово результата и 128 КиБ media FIFO не пересекаются.
+  // Кольцо FT812 лежит в RAM_G с #C0000; GS и ESP его не требуют.
+  if ((f & 1) && (!a->align || !a->pcm_total || a->scale != 1 ||
+                  !a->rate || a->rate > 1000 ||
+                  a->bytes > (a->sink ? AVI_RESULT : PCM_BASE) / 2))
+  { a->pcm_rate = 0; a->ok = 0; }
+}
+
 void far_entry(IO_SHARED *p)
 {
   if (p->op == IO_OPEN) p->ok = sdr_open((u8*)0xC000, p->size) == SDR_OK;
   else if (p->op == IO_READ) p->ok = sdr_read(p->fsec, p->n, p->page, p->offs);
   else if (p->op == IO_FT_INIT) ft_init_mode(p);
-  else if (p->op == IO_VIEW) avi_view(AVI_FAR);
+  else if (p->op == IO_AVI)
+  {
+    avi_sound(AVI_FAR);
+    if (AVI_FAR->ok == 1) avi_view(AVI_FAR);
+  }
   else if (p->op >= ESP_DETECT) esp_entry((ESP_SHARED*)p);
   else p->ok = 0;
 }

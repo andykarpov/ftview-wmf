@@ -252,8 +252,8 @@ def build_plugin(out, target, extra=()):
         for name, addr in fixed.items():
             if sym.get(name) != addr:
                 fail('%s: %s at %s, not #%04X' % (bank, name, sym.get(name), addr))
-        # the video bank: hud_cmd from #BB80; the I/O bank: the ESP ring from #A800
-        limit = {9: 0xBB80, 10: 0xA800}.get(page, 0xBD00)
+        # the video bank: hud_cmd from #BB80; the I/O bank: the ESP ring from #AC00
+        limit = {9: 0xBB80, 10: 0xAC00}.get(page, 0xBD00)
         for name, (start, size) in a.items():
             if not size:
                 continue
