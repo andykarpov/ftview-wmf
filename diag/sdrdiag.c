@@ -7,7 +7,7 @@
 #include <defs.h>
 #include <wc_api.h>
 #include "sdr.h"
-#include <wc_api.c>
+#include "wc_api_min.c"
 
 #define TMN (*(volatile u8*)0x6009)
 #define PAGE3 (*(volatile u8*)0x6003)
@@ -150,9 +150,9 @@ void run()
   if (r == SDR_OK)
   {
     p += sprintf(p, "\x0D" " card SD%c, %s, %u sect/cluster",
-                 sdr_cs == 1 ? '1' : '2', sdr_hc ? "SDHC" : "SDSC", sdr_spc);
+                 sdr.cs == 1 ? '1' : '2', sdr.hc ? "SDHC" : "SDSC", sdr.spc);
     p += sprintf(p, "\x0D" " %lu clusters, %u extents, open %u ms",
-                 sdr_ncl, sdr_next, f_open * 20);
+                 sdr.ncl, sdr.next, f_open * 20);
     map_buffer();
     page = PAGE3;
     lim = nsec < SPEED_SECTORS ? nsec : SPEED_SECTORS;

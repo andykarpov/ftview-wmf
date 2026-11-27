@@ -13,7 +13,7 @@ OUT = ROOT / 'build' / 'test'
 
 
 def main():
-    subprocess.run([sys.executable, '-I', str(ROOT / 'tools/build.py'), '--build-dir', str(OUT / 'diag'), '--data-loc', '0xB000',
+    subprocess.run([sys.executable, '-I', str(ROOT / 'tools/build.py'), '--build-dir', str(OUT / 'diag'), '--data-loc', '0xB000', '--crt0', str(ROOT / 'diag/crt0.s'),
                     '--header', str(ROOT / 'diag/sdrdiag_h.c'), '-o', str(OUT / 'SDRTEST.WMF'),
                     str(ROOT / 'diag/sdrdiag.c'), str(ROOT / 'src/sdr.c')], check=True, stdout=subprocess.DEVNULL)
     data = bytes(range(256)) * 700 + b'tail'

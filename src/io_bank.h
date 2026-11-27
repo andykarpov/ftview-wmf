@@ -1,0 +1,20 @@
+#pragma once
+// The I/O bank (page 10 of the WMF): the SD reader (sdr.c) for the other
+// banks, called by far_call(IO_PAGE, IO_FAR) with buffer page 1 in #C000
+// (the reader state is in its tail, SDR_STATE_ADDR).
+
+#define IO_PAGE 10
+#define IO_OPEN 1         // sdr_open(fs_buf, size): the file WC started the plugin with
+#define IO_READ 2         // sdr_read(fsec, n, page, offs)
+
+typedef struct
+{
+  u8 op, ok;
+  u8 n, page;
+  u16 offs;
+  u32 fsec;
+  u32 size;
+} IO_SHARED;
+
+// The tail of buffer page 1, after AVI_FAR (#FF00, 77 bytes).
+#define IO_FAR ((IO_SHARED*)0xFFF0)

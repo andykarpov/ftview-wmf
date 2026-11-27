@@ -30,12 +30,10 @@ __sfr __banked __at 0x2CAF SDR_DMANUMH;
 #define WC_GIPAGPL 0x32
 #define WC_CHTOSEP 0x34
 
-u8 sdr_cs, sdr_hc, sdr_spc;
-u16 sdr_next;
-u32 sdr_ncl;
-SDR_EXT sdr_ext[SDR_MAX_EXT];
+#ifndef SDR_STATE_ADDR
+SDR_STATE sdr;
+#endif
 
-static u8 spc_shift;
 static u32 fat_lba, data_lba, max_cl;
 static u32 fat_cached;
 static u8 *fat_buf;
@@ -120,7 +118,7 @@ static u8 cmd(u8 c, u32 arg)
 {
   u8 n, r;
   deselect();
-  SDR_CONF = sdr_cs;
+  SDR_CONF = sdr.cs;
   SDR_DATA = 0xFF;
   wait_ready();
   SDR_DATA = 0x40 | c;
@@ -139,7 +137,7 @@ static u8 cmd(u8 c, u32 arg)
 
 static u32 addr(u32 lba)
 {
-  return sdr_hc ? lba : lba << 9;
+  return sdr.hc ? lba : lba << 9;
 }
 
 // Wait for the data token; the read that returns it clocks data byte 0.
@@ -204,7 +202,7 @@ bool sdr_read_lba(u32 lba, u8 *dst)
 static bool probe(u8 cs, u32 lba, u8 *sample, u8 *buf)
 {
   u8 ocr;
-  sdr_cs = cs;
+  sdr.cs = cs;
   if (cmd(58, 0))
   {
     deselect();
@@ -216,7 +214,7 @@ static bool probe(u8 cs, u32 lba, u8 *sample, u8 *buf)
   (void)SDR_DATA;
   deselect();
   if (!(ocr & 0x80)) return false;    // power up not finished
-  sdr_hc = (ocr & 0x40) ? 1 : 0;
+  sdr.hc = (ocr & 0x40) ? 1 : 0;
   return sdr_read_lba(lba, buf) && !memcmp(buf, sample, 512);
 }
 
@@ -225,7 +223,7 @@ static bool probe(u8 cs, u32 lba, u8 *sample, u8 *buf)
 static u16 rd16(u8 *p) { return p[0] | ((u16)p[1] << 8); }
 static u32 rd32(u8 *p) { return rd16(p) | ((u32)rd16(p + 2) << 16); }
 
-// BPB of a FAT32 volume at vol in buf: sets fat_lba, data_lba, sdr_spc,
+// BPB of a FAT32 volume at vol in buf: sets fat_lba, data_lba, sdr.spc,
 // max_cl; true when it is one and lba is in its data area.
 static bool bpb(u32 vol, u8 *buf, u32 lba)
 {
@@ -240,9 +238,9 @@ static bool bpb(u32 vol, u8 *buf, u32 lba)
   fat_lba = vol + rsv;
   data_lba = fat_lba + fsz * nfat;
   if (lba < data_lba || lba >= vol + tot) return false;
-  sdr_spc = spc;
-  for (spc_shift = 0; (1 << spc_shift) != spc; spc_shift++);
-  max_cl = ((vol + tot - data_lba) >> spc_shift) + 1;
+  sdr.spc = spc;
+  for (sdr.shift = 0; (1 << sdr.shift) != spc; sdr.shift++);
+  max_cl = ((vol + tot - data_lba) >> sdr.shift) + 1;
   if (max_cl > (fsz << 7) - 1) max_cl = (fsz << 7) - 1;
   return true;
 }
@@ -340,19 +338,19 @@ static u8 walk(u32 cl)
 {
   u32 fcl = 0, prev = 0, left;
   u8 idx;
-  sdr_next = 0;
+  sdr.next = 0;
   fat_cached = 0xFFFFFFFFUL;
   for (;;)
   {
     if (cl < 2 || cl > max_cl) return SDR_E_FAT;
     if (!fcl || cl != prev + 1)
     {
-      if (sdr_next == SDR_MAX_EXT) return SDR_E_FRAG;
-      sdr_ext[sdr_next].fcl = fcl;
-      sdr_ext[sdr_next].lba = data_lba + ((cl - 2) << spc_shift);
-      sdr_next++;
+      if (sdr.next == SDR_MAX_EXT) return SDR_E_FRAG;
+      sdr.ext[sdr.next].fcl = fcl;
+      sdr.ext[sdr.next].lba = data_lba + ((cl - 2) << sdr.shift);
+      sdr.next++;
     }
-    left = sdr_ncl - 1 - fcl;        // links still to follow
+    left = sdr.ncl - 1 - fcl;        // links still to follow
     if (!left) break;
     if (!fat_next(cl)) return SDR_E_IO;  // caches the sector of cl
     idx = cl & 127;
@@ -382,11 +380,11 @@ static u16 ext_of(u32 fcl);
 
 u32 sdr_lba(u32 fsec)
 {
-  u32 fcl = fsec >> spc_shift;
+  u32 fcl = fsec >> sdr.shift;
   u16 i;
-  if (fcl >= sdr_ncl) return 0;
+  if (fcl >= sdr.ncl) return 0;
   i = ext_of(fcl);
-  return sdr_ext[i].lba + ((fcl - sdr_ext[i].fcl) << spc_shift) + (fsec & (sdr_spc - 1));
+  return sdr.ext[i].lba + ((fcl - sdr.ext[i].fcl) << sdr.shift) + (fsec & (sdr.spc - 1));
 }
 
 u8 sdr_open(u8 *buf, u32 size)
@@ -394,7 +392,7 @@ u8 sdr_open(u8 *buf, u32 size)
   u8 *sample = buf, *list = buf + 512, *sec = buf + 1024;
   u32 lba, cl;
   u8 i, r;
-  sdr_next = 0;
+  sdr.next = 0;
   if (!size) return SDR_E_EMPTY;
   // The first sector through WC, then the LBAs of the first cluster.
   wc_gipagpl();
@@ -414,21 +412,21 @@ u8 sdr_open(u8 *buf, u32 size)
     if (volume(sec, lba))
     {
       r = SDR_E_ALIGN;
-      if (!((lba - data_lba) & (sdr_spc - 1)))
+      if (!((lba - data_lba) & (sdr.spc - 1)))
       {
-        cl = ((lba - data_lba) >> spc_shift) + 2;
-        sdr_ncl = ((size - 1) >> (9 + spc_shift)) + 1;
+        cl = ((lba - data_lba) >> sdr.shift) + 2;
+        sdr.ncl = ((size - 1) >> (9 + sdr.shift)) + 1;
         fat_buf = sec;
         r = walk(cl);
         // CHTOSEP gave the first cluster: the same sectors, no more.
         for (i = 0; r == SDR_OK && i < 128; i++)
-          if (rd32(list + (i << 2)) != (i < sdr_spc ? lba + i : 0))
+          if (rd32(list + (i << 2)) != (i < sdr.spc ? lba + i : 0))
             r = SDR_E_VERIFY;
       }
     }
   }
   deselect();
-  if (r != SDR_OK) sdr_next = 0;
+  if (r != SDR_OK) sdr.next = 0;
   return r;
 }
 
@@ -499,11 +497,11 @@ static void read_blocks() __naked
   __endasm;
 }
 
-// Index of the extent of file cluster fcl (< sdr_ncl).
+// Index of the extent of file cluster fcl (< sdr.ncl).
 static u16 ext_of(u32 fcl)
 {
   u16 i;
-  for (i = sdr_next - 1; sdr_ext[i].fcl > fcl; i--);
+  for (i = sdr.next - 1; sdr.ext[i].fcl > fcl; i--);
   return i;
 }
 
@@ -515,12 +513,12 @@ bool sdr_read(u32 fsec, u8 count, u8 page, u16 offs)
   bool ok = true;
   while (count && ok)
   {
-    fcl = fsec >> spc_shift;
-    if (fcl >= sdr_ncl) return false;
+    fcl = fsec >> sdr.shift;
+    if (fcl >= sdr.ncl) return false;
     i = ext_of(fcl);
-    lba = sdr_ext[i].lba + ((fcl - sdr_ext[i].fcl) << spc_shift) + (fsec & (sdr_spc - 1));
+    lba = sdr.ext[i].lba + ((fcl - sdr.ext[i].fcl) << sdr.shift) + (fsec & (sdr.spc - 1));
     // sectors up to the end of the extent: one CMD18 for them
-    left = ((i + 1 < sdr_next ? sdr_ext[i + 1].fcl : sdr_ncl) << spc_shift) - fsec;
+    left = ((i + 1 < sdr.next ? sdr.ext[i + 1].fcl : sdr.ncl) << sdr.shift) - fsec;
     run = left < count ? left : count;
     if (cmd(18, addr(lba)))
       ok = false;

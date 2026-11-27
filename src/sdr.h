@@ -25,7 +25,7 @@ enum
 
 // Extents: runs of consecutive clusters. fcl is the index in the file of
 // the first cluster of the run, lba the sector of that cluster.
-#define SDR_MAX_EXT 64
+#define SDR_MAX_EXT 30
 
 typedef struct
 {
@@ -33,12 +33,26 @@ typedef struct
   u32 lba;
 } SDR_EXT;
 
-extern u8 sdr_cs;          // #77 value that selects the card (1 SD1, #0B SD2)
-extern u8 sdr_hc;          // 1: block addressing (SDHC / SDXC)
-extern u8 sdr_spc;         // sectors per cluster
-extern u16 sdr_next;       // extents in sdr_ext
-extern u32 sdr_ncl;        // clusters of the file
-extern SDR_EXT sdr_ext[SDR_MAX_EXT];
+// The whole state of the reader, 256 bytes. The plugin keeps it in the tail
+// of its buffer page 1 (SDR_STATE_ADDR, #FE00, valid while that page is in
+// #C000): the DATA of a code bank is too small. Elsewhere it is a global.
+typedef struct
+{
+  u8 cs;                   // #77 value that selects the card (1 SD1, #0B SD2)
+  u8 hc;                   // 1: block addressing (SDHC / SDXC)
+  u8 spc;                  // sectors per cluster
+  u8 shift;                // log2(spc)
+  u16 next;                // extents in ext
+  u32 ncl;                 // clusters of the file
+  u8 res[6];
+  SDR_EXT ext[SDR_MAX_EXT];
+} SDR_STATE;
+
+#ifdef SDR_STATE_ADDR
+#define sdr (*(SDR_STATE*)SDR_STATE_ADDR)
+#else
+extern SDR_STATE sdr;
+#endif
 
 // buf: at least 1536 bytes of scratch. Leaves the WC stream at the start of
 // the file (GIPAGPL), all chip selects off.
