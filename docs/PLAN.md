@@ -34,6 +34,12 @@ No option in wc.ini: the plugin probes the ESP (`AUDIO_GET_STATE` answers READY)
   both).
 - End: `AUDIO_END` after the last audio chunk, ENDED ends the sound.
 
+## State
+
+- Phases 1 and 2 done (branch esp-audio). Board (Mini G): IMA ADPCM through the ESP at full
+  speed, no underruns, seek / pause / Esc. PCM 8 through the ESP played at 80 % speed, so GS
+  takes PCM 8 first (user, 2026-11-27); the ESP is the second sink for it.
+
 ## Phases (one PR each)
 
 1. ESP client in the I/O bank (detect, START, PUSH with the M2S / W_END handling of

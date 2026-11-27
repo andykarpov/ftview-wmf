@@ -79,9 +79,18 @@ the card, volume, extents, both speeds and the comparison of the whole file. Not
 
 ## AVI player (WCI)
 
-- Frame by frame (CMD_VIDEOFRAME, media FIFO at RAM_G #E0000, the seek table at #D0000) only for
-  MJPEG with PCM 8 bit or no audio; other audio (IMA ADPCM) goes to CMD_PLAYVIDEO (no HUD, no
-  seek, Esc exits). PCM8 is played by the GS (src/gsdrv.s, assembled into gsdrv.h).
+- Frame by frame (CMD_VIDEOFRAME, media FIFO at RAM_G #E0000, the seek table at #D0000) for
+  MJPEG of an integer frame rate whose frame fits twice in RAM_G (avi_probe); the rest goes to
+  CMD_PLAYVIDEO (no HUD, no seek, Esc exits).
+- The sound (avi.sink, decided by avi_probe): PCM 8 mono to GS (src/gsdrv.s, assembled into
+  gsdrv.h; sent during the DMA of a block); else the ESP32 audio player of ZiFi32 (src/esp.c in
+  the I/O bank, docs/PLAN.md: PCM 8 / 16, IMA ADPCM, A-law, u-law behind a WAV header from strf;
+  staged before the DMA, PUSHed by age / 4 KB by OTIR; ft_state bit 6 = ESP found); else PCM 8
+  to the FT812 audio. PCM 8 through the ESP played at 80 % speed (uncompressed is twice the SPI
+  traffic of ADPCM), so GS keeps it (user's choice). The player counts the sound in bytes of the
+  stream: rate and total from strh, PLAYED turned into bytes by esp.c. `make noesp` builds a
+  plugin that never uses the ESP, `make espdbg` one whose HUD shows ESP underruns / input KB /
+  PUSHes a second.
 - The file is read by the SD reader (avi.io, avi.disk = sector); without it (open failed) LOAD512
   from the start, no seek. The list of videos (Enter) of WCI is not built: it reads the directory
   through WC internals.
