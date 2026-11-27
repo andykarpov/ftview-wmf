@@ -9,6 +9,7 @@
 #include <wc_api.h>
 #include "sdr.h"
 #include "io_bank.h"
+#include "esp.h"
 
 __at (0xBFE0) u16 ret_sp;
 __at (0xBFE2) u16 ret_ix;
@@ -108,5 +109,6 @@ void far_entry(IO_SHARED *p)
   if (p->op == IO_OPEN) p->ok = sdr_open((u8*)0xC000, p->size) == SDR_OK;
   else if (p->op == IO_READ) p->ok = sdr_read(p->fsec, p->n, p->page, p->offs);
   else if (p->op == IO_FT_INIT) ft_init_mode(p);
+  else if (p->op >= ESP_DETECT) esp_entry((ESP_SHARED*)p);
   else p->ok = 0;
 }

@@ -176,7 +176,7 @@ def build(out, target, sources, header, data_loc=DATA_LOC, crt0=None):
 # the gates from #BF80 and the entry frame #BFE0..#BFF1 equal in both.
 BANKS = (('image', 0, ['src/main.c'], []),
          ('video', 9, ['src/main.c'], ['-DFTVIEW_VIDEO_BANK']),
-         ('io', 10, ['src/io_bank.c', 'src/sdr.c'], []))
+         ('io', 10, ['src/io_bank.c', 'src/sdr.c', 'src/esp.c'], ['-DFTVIEW_IO_BANK']))
 FIXED = {'_fs_buf': 0xC000, '_ret_sp': 0xBFE0, '_ret_ix': 0xBFE2, '_ret_iy': 0xBFE4,
          '_filesize': 0xBFE6, '_file_ext': 0xBFEA, '_call_type': 0xBFEB,
          '_gs_loaded': 0xBFEC, '_ft_state': 0xBFED, '_scr_w': 0xBFEE, '_scr_h': 0xBFF0,
@@ -252,7 +252,8 @@ def build_plugin(out, target):
         for name, addr in fixed.items():
             if sym.get(name) != addr:
                 fail('%s: %s at %s, not #%04X' % (bank, name, sym.get(name), addr))
-        limit = 0xBB80 if page == 9 else 0xBD00
+        # the video bank: hud_cmd from #BB80; the I/O bank: the ESP ring from #A800
+        limit = {9: 0xBB80, 10: 0xA800}.get(page, 0xBD00)
         for name, (start, size) in a.items():
             if not size:
                 continue
