@@ -32,5 +32,6 @@ typedef struct
   u32 file_max_size;   /* +161 Max file size      */
   char name[32];       /* +165 Plugin name        */
   SCOND cond;          /* +197 Starting condition */
-  u8 res4[314];        /* +198 -reserved-         */
+  u8 res4[62];         /* +198 -reserved-         */
+  u8 params[252];      /* +260 options of wc.ini  */
 } WC_HDR;

@@ -23,6 +23,10 @@ typedef struct
   u32 disk;
   u8 io;
   u8 msg, code;       // AVI_OP_MSG: window (AVI_MSG_*), reason
+  // The frame on the screen of the FT812 mode (avi_view of the image bank,
+  // the video bank has no room for it): size, BITMAP_TRANSFORM_A / E.
+  u16 view_w, view_h;
+  u32 ta, te;
 } AVI_SHARED;
 
 #define AVI_OP_SEEK 1     // точка входа для target (нули — с начала файла);

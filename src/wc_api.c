@@ -40,6 +40,19 @@ void wc_map_buffer(u8 page) __sdcccall(1) __naked
   __endasm;
 }
 
+// PRM_PL (API 83): the number (1..10) of the option of parameter n (1..8) of
+// the header (+260) that wc.ini chose for this plugin, its default when the
+// line has other options, 0 when it has none.
+u8 wc_param(u8 n) __sdcccall(1) __naked
+{
+  n;
+  __asm
+    ex af, af
+    ld a, #83
+    jp _WCAPI
+  __endasm;
+}
+
 bool wc_api__bool(u8 a) __sdcccall(0) __naked
 {
   a;  // to avoid SDCC warning

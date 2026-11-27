@@ -819,6 +819,38 @@ u8 buf_codec()
   return 2;
 }
 
+// The frame on the screen, after the probe (the sizes of avih).
+// Кадр растягивается на экран с билинейной фильтрацией FT812: при нецелом
+// растяжении (2,39:1, маленькие ролики) ступеньки мягче. По руководству FT81x
+// такая точка рисуется за 1/4 такта вместо 1/16: кадр шириной до 1024 точек —
+// до 256 тактов на строку при бюджете не меньше 2048.
+void avi_view()
+{
+  // Сначала выбираем ограничивающую сторону в 32 битах. Промежуточная
+  // высота узкого кадра могла переполнить u16; округлённая ширина 0 затем
+  // приводила к делению на ноль при расчёте матрицы. Минимум — один пиксель.
+  // Кадр вписывается во весь экран scr_w×scr_h (режим FT812), HUD рисуется
+  // поверх низа (в 1024×768 кадр 4:3 512×384 — ровно вдвое на весь экран,
+  // 16:9 512×288 — 1024×576 по центру, HUD тогда на нижнем чёрном поле).
+  // Пиксели режима 10 (640×1024 на 1280×1024) вдвое шире: вписываем в
+  // 1280 и сжимаем ширину обратно.
+  u16 ew = scr_w;
+  if (ft_state & 0x20) ew <<= 1;
+  if ((u32)avi_height * ew > (u32)avi_width * scr_h)
+  {
+    avi.view_h = scr_h; avi.view_w = (u32)avi_width * scr_h / avi_height;
+  }
+  else
+  {
+    avi.view_w = ew; avi.view_h = (u32)avi_height * ew / avi_width;
+  }
+  if (ft_state & 0x20) avi.view_w >>= 1;
+  if (!avi.view_w) avi.view_w = 1;
+  if (!avi.view_h) avi.view_h = 1;
+  avi.ta = (u32)avi_width * 256 / avi.view_w;
+  avi.te = (u32)avi_height * 256 / avi.view_h;
+}
+
 void far_entry(AVI_SHARED *p)
 {
   view_failed = 0;
@@ -836,6 +868,7 @@ void far_entry(AVI_SHARED *p)
     index_state = 0;
     avi = *p;
     avi.ok = avi_probe();
+    if (avi.width && avi.height) avi_view();
     if (view_failed) avi.ok = 2;
     *p = avi;
   }
