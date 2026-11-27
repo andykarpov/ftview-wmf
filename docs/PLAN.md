@@ -40,6 +40,13 @@ No option in wc.ini: the plugin probes the ESP (`AUDIO_GET_STATE` answers READY)
   speed, no underruns, seek / pause / Esc. PCM 8 through the ESP played at 80 % speed, so GS
   takes PCM 8 first (user, 2026-11-27); the ESP is the second sink for it.
 
+- Phases 3 (MP3) and 4 (AAC) dropped by the user (2026-11-27). Found on the board (branch
+  esp-mp3, not merged): dr_mp3 of the ESP engine refills its 64 KB buffer below 16 KB with a
+  blocking read (aud_io_read in cb_read), so it needs 48-64 KB of the stream ahead; the AVI
+  gives only about 0.3 s (the audio comes with its block of the video) and the player stood
+  still. It would need cb_read by aud_io_read_some in the ESP firmware, or the audio read ahead
+  from the card by idx1. MP3 / AAC in an AVI stay with CMD_PLAYVIDEO.
+
 ## Phases (one PR each)
 
 1. ESP client in the I/O bank (detect, START, PUSH with the M2S / W_END handling of
