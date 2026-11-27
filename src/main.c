@@ -647,7 +647,8 @@ void show_dls()
 void show_avi()
 {
   wc_video_clock(1);
-  ft_wreg32(FT_REG_FREQUENCY, 64000000UL);
+  // REG_FREQUENCY is the clock of the mode, set by the I/O bank (it was
+  // 64 MHz here for the one mode of the original).
   avi_first();
   do
   {
@@ -664,7 +665,6 @@ void show_avi()
     if (!avi_mjpeg()) { view_failed = VIEW_CODEC; return; }
 
     wc_vmode(0x87);
-    ft_wreg32(FT_REG_FREQUENCY, 64000000UL);
     avi_restart(true);
   } while (avi_switch && !view_failed);
 }
