@@ -387,8 +387,8 @@ void avi_hud_build()
       if (!pcm_gs) ft_Number(992, 748, 26, 0, ft_state >> 2 & 7);
     }
     ft_Text(512, 730, 26, FT_OPT_CENTERX,
-            avi_paused ? "Paused: Space play | Left/Right seek | Enter list | Esc exit" :
-                         "Space pause | Left/Right seek | Home restart | Enter list | Esc exit");
+            avi_paused ? "Paused: Space play | Left/Right seek | Esc exit" :
+                         "Space pause | Left/Right seek | Home restart | Esc exit");
   }
   ft_Display(); ft_ccmd(FT_CCMD_SWAP);
   hud_len = ft_ccmdp << 2;
