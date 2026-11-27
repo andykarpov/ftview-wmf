@@ -81,6 +81,10 @@ static void ft_init_mode(IO_SHARED *p)
   p->fsec = m->v_visible;
   ft_wreg16(FT_REG_HSIZE, m->h_visible);
   ft_wreg16(FT_REG_VSIZE, m->v_visible);
+  // The system clock of the mode (8 MHz x f_mul): the chip times the audio,
+  // the video of PLAYVIDEO and its timers by this value, not by the real
+  // clock; with the default 60 MHz the video ran 1.5 times slower at 40 MHz.
+  ft_wreg32(FT_REG_FREQUENCY, (u32)m->f_mul * 8000000UL);
   ft_wreg8(FT_REG_SWIZZLE, 0);
   ft_wreg8(FT_REG_PCLK_POL, 0);
   ft_wreg8(FT_REG_CSPREAD, 0);
